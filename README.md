@@ -34,7 +34,7 @@ Detailed benchmark reports and experiment outputs are available in the `evaluati
 
 # Current Implementation
 
-The project currently consists of five completed milestones.
+The project currently consists of six completed milestones.
 
 ## ✅ Version 1 — Dense RAG
 
@@ -134,6 +134,36 @@ Version 5 introduces:
 * Support for deep runtime and source-level reasoning
 
 This enables the system to answer implementation-focused developer questions that cannot be answered reliably using documentation alone.
+
+---
+
+## ✅ Version 6 — Evaluation & Observability
+
+Version 6 focuses on measuring the system rather than simply adding another retrieval technique.
+
+The system is evaluated using **82 benchmark questions** across:
+
+* General developer questions
+* Code review
+* Debugging
+
+Version 6 introduces:
+
+* Recall@K
+* Precision@K
+* Hit Rate@K
+* Mean Reciprocal Rank (MRR)
+* LLM-as-Judge evaluation
+* Correctness, groundedness, completeness and hallucination scoring
+* Pipeline stage observability
+* Generation token tracking
+* API cost tracking
+* End-to-end latency measurement
+* Structured benchmark result JSON
+* FastAPI backend
+* Streamlit interface
+
+The evaluation framework is used to make architectural decisions based on measured failure cases rather than adding complexity automatically.
 
 ---
 
@@ -252,7 +282,7 @@ Capture Overall Metrics
 Experiment JSON
         │
         ▼
-Evaluation using LLM with Human judgment
+LLM-as-Judge Evaluation
 ```
 
 # Project Structure
@@ -307,6 +337,9 @@ The project follows several design principles that make future versions easier t
 * rank-bm25
 * sentence-transformers
 * FlagEmbedding / BAAI BGE Reranker
+* FastAPI
+* Uvicorn
+* Streamlit
 
 ---
 
@@ -433,34 +466,38 @@ Expand the knowledge base by combining official documentation with the LangGraph
 
 ---
 
-## ⬜ Version 6 — Parent Document Retrieval
+## ✅ Version 6 — Evaluation & Observability
 
-Retrieve larger parent documents while searching over smaller chunks to provide richer context.
-
----
-
-## ⬜ Version 7 — Evaluation Framework
-
-Evaluate retrieval and generation quality using:
-
-* Recall@K
+* 82-question benchmark
+* Recall@8
+* Precision@8
+* Hit Rate@8
 * MRR
-* RAGAS
-* Faithfulness
-* Latency
-* Cost analysis
+* LLM-as-Judge
+* Correctness / groundedness / completeness / hallucination
+* Token usage
+* Cost tracking
+* End-to-end latency
+* Structured benchmark results
+* FastAPI backend
+* Streamlit interface
 
 ---
 
-## ⬜ Version 8 — Agentic RAG (LangGraph)
+## ⬜ Next — Evidence-Driven Retrieval Improvements
 
-Introduce intelligent retrieval strategies including:
+The next architectural direction is intentionally not fixed yet.
 
+The V6 benchmark will be used to determine whether the system actually benefits from:
+
+* Query analysis
+* Adaptive retrieval
+* Multi-step retrieval
+* Evidence verification
 * Query rewriting
-* Multi-hop retrieval
-* Retrieval planning
-* Tool calling
-* Reflection
+* Agentic retrieval
+
+Agentic RAG will only be introduced if the measured failure cases justify the additional complexity.
 
 ---
 
@@ -497,41 +534,74 @@ Create a `.env` file.
 OPENAI_API_KEY=your_api_key
 ```
 
-Run the application.
+Run the application on CLI.
 
 ```bash
 python main.py
+```
+### Run FastAPI
+
+```bash
+uvicorn app.api.main:app --reload
+```
+
+### Run Streamlit
+
+```bash
+streamlit run ui/streamlit_app.py
 ```
 
 ---
 
 # Version 5 Evaluation
 
-Version 5 was evaluated using approximately 60 challenging implementation-focused benchmark questions covering:
+Version 5 was evaluated using **82 benchmark questions** covering:
 
-* Pregel runtime
-* Scheduling
-* StateGraph
-* ToolNode
-* Interrupts
-* Checkpointing
-* Store
-* Subgraphs
-* Command
-* Send
-* Runtime debugging
+* General developer questions — 52
+* Code review — 20
+* Debugging — 10
 
-The evaluation showed that multi-corpus retrieval substantially improved implementation-level question answering. Remaining errors were primarily caused by LLM reasoning and code generation rather than retrieval quality.
+### Overall Results
+
+| Metric | Result |
+|---|---:|
+| Recall@8 | **0.624** |
+| Precision@8 | **0.396** |
+| Hit Rate@8 | **0.902** |
+| MRR | **0.743** |
+| Correctness | **4.756 / 5** |
+| Groundedness | **4.793 / 5** |
+| Completeness | **4.756 / 5** |
+| Hallucination | **0.305 / 5** |
+| Average end-to-end latency | **28.97s** |
+| Average token usage | **3,472 tokens/question** |
+| Average cost | **~$0.00214/question** |
+
+Latency was measured end-to-end on a CPU-only development machine.
+
+The results show a useful distinction between retrieval and answer quality: retrieval is not perfect, particularly for broad code-review and architectural questions, while generated answers are generally strong and well-grounded.
+
+The benchmark is therefore treated as a baseline for future architectural decisions rather than as a target to optimize blindly. Before introducing additional complexity such as Agentic RAG, the failure cases should be investigated to determine whether the underlying issue is retrieval coverage, ranking, benchmark expectations, or the need for iterative evidence gathering.
+
+Detailed experiment outputs are available in the `evaluation/results/` directory.
 
 # Future Improvements
 
-Possible extensions beyond the current roadmap include:
+Future work will be driven by the V6 benchmark rather than by adding components automatically.
 
-* Support multiple documentation repositories
+Possible extensions include:
+
+* Evidence-driven adaptive retrieval
+* Query analysis and rewriting
+* Iterative / multi-step retrieval
+* Evidence verification
+* Retrieval and reranking latency optimization
 * Background indexing
 * Automatic documentation versioning
 * Docker deployment
 * CI/CD pipeline
-* Web interface
 * Streaming responses
 * Conversation memory
+* Expansion to additional LangChain documentation and implementation sources
+
+The key design principle is to add complexity only when evaluation shows that the current architecture needs it.

@@ -30,8 +30,9 @@ class HybridRetriever(BaseRetriever):
         ranked_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
         fused_docs = [doc_map[doc_id] for doc_id, _ in ranked_scores[:self._top_k]]
+        fused_scores = [scores[doc_id] for doc_id, _ in ranked_scores[:self._top_k]]
 
-        return fused_docs
+        return fused_docs, fused_scores
 
     def retrieve(self, query: str, observer: PipelineObserver | None = None) -> list[Document]:
         """
@@ -49,14 +50,14 @@ class HybridRetriever(BaseRetriever):
         bm25_results = self._bm25_index.retrieve(query, observer)
 
         start_time = perf_counter()
-        fused_results = self._rrf([dense_results, bm25_results])
+        fused_results, fused_scores = self._rrf([dense_results, bm25_results])
         end_time = perf_counter()
 
         if observer is not None:
             observer_docs: list[RetrievedDocument] = []
 
-            for doc in fused_results:
-                observer_docs.append(RetrievedDocument(chunk_id=doc.metadata.get("chunk_id"), source=doc.metadata.get("source"), score=None))
+            for i, (doc, score) in enumerate(zip(fused_results, fused_scores)):
+                observer_docs.append(RetrievedDocument(chunk_id=doc.metadata.get("chunk_id"), source=doc.metadata.get("source"), document_type=doc.metadata.get("corpus"), retriever_score=score, rank=i+1))
 
             observer.record_stage("RRF Fusion", (end_time - start_time), self._top_k, observer_docs)
 

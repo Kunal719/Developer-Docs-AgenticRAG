@@ -13,15 +13,20 @@ class BenchmarkQuestion:
     difficulty: str
     question: str
     expected_files: list[str]
-    expected_concepts: list[str]
-    tags: list[str]
+    concepts: list[str]
+    tags: Optional[list[str]] = None
+    code_snippet: str | None = None
+    observed_behavior: str | None = None
+    expected_behavior: str | None = None
+    error: str | None = None
+    logs: str | None = None
 
 @dataclass
 class RetrievedDocument:
     chunk_id: str
     source: str
     document_type: Literal["documentation", "implementation"]
-    retriever_score: float
+    retriever_score: Optional[float] = None
     reranker_score: Optional[float] = None
     rank: Optional[int] = None
 
@@ -39,7 +44,6 @@ class ExperimentMetadata:
     embedding_model: str
     llm_provider: str
     llm: str
-    temperature: float
     chunk_size: int
     chunk_overlap: int
     dense_top_k: int
@@ -49,6 +53,7 @@ class ExperimentMetadata:
     reranker_top_k: Optional[int] = None
     reranker_name: Optional[str] = None
     judge_model: Optional[str] = None
+    judge_provider: Optional[str] = None
 
 @dataclass
 class GenerationMetrics:

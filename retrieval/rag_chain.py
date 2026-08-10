@@ -11,6 +11,8 @@ from utils.document_formatter import format_retrieved_context
 from utils.helper import calculate_estimated_cost
 from time import perf_counter
 
+from config import GENERATION_INPUT_PRICE, GENERATION_OUTPUT_PRICE
+
 def build_rag_chain(
         retriever: BaseRetriever, 
         reranker: BaseReranker, 
@@ -34,8 +36,8 @@ def build_rag_chain(
         """
         Retrieve documents and rerank them based on the query.
         """
-        documents = retriever.retrieve(query)
-        reranked_documents = reranker.rerank(query, documents)
+        documents = retriever.retrieve(query, observer)
+        reranked_documents = reranker.rerank(query, documents, observer)
 
         return {"question": query, "context": reranked_documents}
 
@@ -75,14 +77,17 @@ def build_rag_chain(
     #         "context": reranked_documents,
     #     }
 
-    retrieve_and_rerank_documents = RunnableLambda(retrieve_and_rerank)
+    retrieve_and_rerank_documents_runnable = RunnableLambda(retrieve_and_rerank)
 
-    format_documents = RunnableLambda(
-        lambda inputs: {
-            "question": inputs["question"],
-            "context": format_retrieved_context(inputs["context"])
-        }
-    )
+    def format_documents(inputs):
+        context = format_retrieved_context(inputs["context"])
+
+        if observer is not None:
+            observer.record_context(context)
+
+        return {"question": inputs["question"], "context": context}
+
+    format_documents_runnable = RunnableLambda(format_documents)
 
     def debug_prompt(messages):
         print("\n" + "=" * 100)
@@ -97,40 +102,12 @@ def build_rag_chain(
 
         return messages
 
-    def invoke_llm(inputs) -> AIMessage:
-        return llm.invoke(inputs)
-    # def invoke_llm(inputs):
-
-    #     start_time = perf_counter()
-    #     response = llm.invoke(inputs)
-    #     end_time = perf_counter()
-
-    #     latency = (end_time - start_time)
-
-    #     usage = response.usage_metadata
-
-    #     if observer is not None:
-    #         observer.record_generation(
-    #             answer=response.content,
-    #             prompt_tokens=usage["input_tokens"],
-    #             completion_tokens=usage["output_tokens"],
-    #             total_tokens=usage["total_tokens"],
-    #             estimated_cost=calculate_estimated_cost(
-    #                 input_tokens=usage["input_tokens"], 
-    #                 output_tokens=usage["output_tokens"]),
-    #             generation_latency=latency,
-    #         )
-
-    #     return response
-
     chain = (
-        retrieve_and_rerank_documents
-        | format_documents
+        retrieve_and_rerank_documents_runnable
+        | format_documents_runnable
         | prompt
-        | RunnableLambda(debug_prompt)
+        # | RunnableLambda(debug_prompt)
         | llm
-        # | RunnableLambda(invoke_llm)
-        # | StrOutputParser()
     )
 
     return chain
@@ -148,12 +125,15 @@ def invoke_chain(chain, question: str, observer: PipelineObserver | None = None)
     if observer is not None and usage is not None:
         observer.record_generation(
             answer=response.content,
+            answer_length=len(response.content),
             prompt_tokens=usage["input_tokens"],
             completion_tokens=usage["output_tokens"],
             total_tokens=usage["total_tokens"],
             estimated_cost=calculate_estimated_cost(
                 input_tokens=usage["input_tokens"],
                 output_tokens=usage["output_tokens"],
+                input_price_per_million=GENERATION_INPUT_PRICE,
+                output_price_per_million=GENERATION_OUTPUT_PRICE
             ),
             generation_latency=latency,
         )

@@ -28,15 +28,16 @@ class CrossEncoderReranker(BaseReranker):
         scored_docs.sort(key=lambda x: x[1], reverse=True)
 
         final_docs = [doc for doc, _ in scored_docs[:self._top_k]]
+        final_scores = [score for _, score in scored_docs[:self._top_k]]
         end_time = perf_counter()
 
         if observer is not None:
             observer_docs: list[RetrievedDocument] = []
 
-            for doc in final_docs:
-                observer_docs.append(RetrievedDocument(chunk_id=doc.metadata.get("chunk_id"), source=doc.metadata.get("source"), score=None))
+            for i, (doc, score) in enumerate(zip(final_docs, final_scores)):
+                observer_docs.append(RetrievedDocument(chunk_id=doc.metadata.get("chunk_id"), source=doc.metadata.get("source"), document_type=doc.metadata.get("corpus"), reranker_score=float(score), rank=i+1))
 
-            observer.record_stage("Cross-Encoder Reranker", (end_time - start_time), self._top_k, observer_docs)
+            observer.record_stage("Reranker", (end_time - start_time), self._top_k, observer_docs)
 
         # for doc in final_docs:
             # print(f"Corpus: {doc.metadata['corpus']} \n Source: {doc.metadata['source']}")

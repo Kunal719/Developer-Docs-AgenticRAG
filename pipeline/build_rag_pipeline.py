@@ -19,6 +19,7 @@ from config import (
     RRF_K,
     MODEL_NAME,
     MODEL_PROVIDER,
+    MODEL_TEMP,
     RERANKER_MODEL,
     RERANK_TOP_K
 )
@@ -55,6 +56,7 @@ def build_rag_pipeline(
     llm = get_llm(
         model_name=MODEL_NAME,
         model_provider=MODEL_PROVIDER,
+        temperature=MODEL_TEMP
     )
     print("LLM ready")
 

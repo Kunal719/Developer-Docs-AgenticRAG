@@ -26,6 +26,8 @@ class ResultWriter:
         for result in results:
             result_dict = asdict(result)
 
+            result_dict["judge_evaluation"] = result.judge_evaluation.model_dump()
+
             # Convert datetime to ISO string
             result_dict["experiment_metadata"]["timestamp"] = (
                 result.experiment_metadata.timestamp.isoformat()

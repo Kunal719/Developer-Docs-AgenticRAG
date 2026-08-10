@@ -1,6 +1,6 @@
 from pathlib import Path
 
-PROJECT_VERSION = "v3"
+PROJECT_VERSION = "v5"
 
 GITHUB_DOC_REPO_URL = "https://github.com/langchain-ai/docs.git"
 LOCAL_DOC_REPO_PATH =  Path("data/raw/docs")
@@ -37,8 +37,19 @@ RERANK_TOP_K = 8
 
 MODEL_NAME = "gpt-5.6-luna"
 MODEL_PROVIDER = "openai"
+MODEL_TEMP = 0.1
+
+JUDGE_MODEL_NAME = "gpt-4o-mini"
+JUDGE_MODEL_PROVIDER = "openai"
+JUDGE_TEMP = 0.0
 
 REBUILD_INDEX = False
+
+GENERATION_INPUT_PRICE = 0.2
+GENERATION_OUTPUT_PRICE = 1.2
+
+JUDGE_INPUT_PRICE = 0.15
+JUDGE_OUTPUT_PRICE = 0.6
 
 DOCUMENTATION_SPARSE_PATHS = [
     "src/oss/langgraph",

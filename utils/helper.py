@@ -1,8 +1,10 @@
+from evaluation.models import BenchmarkQuestion
+
 def calculate_estimated_cost(
     input_tokens: int,
     output_tokens: int,
-    input_price_per_million: float = 0.10,
-    output_price_per_million: float = 0.40,
+    input_price_per_million: float,
+    output_price_per_million: float,
 ) -> float:
     """
     Calculate the estimated API cost in USD.
@@ -20,3 +22,23 @@ def calculate_estimated_cost(
     output_cost = (output_tokens / 1_000_000) * output_price_per_million
 
     return round(input_cost + output_cost, 8)
+
+def build_evaluation_query(question: BenchmarkQuestion) -> str:
+    parts = [question.question]
+
+    if question.code_snippet:
+        parts.append(f"Code:\n```python\n{question.code_snippet}\n```")
+
+    if question.error:
+        parts.append(f"Error:\n{question.error}")
+
+    if question.observed_behavior:
+        parts.append(f"Observed behavior:\n{question.observed_behavior}")
+
+    if question.expected_behavior:
+        parts.append(f"Expected behavior:\n{question.expected_behavior}")
+
+    if question.logs:
+        parts.append(f"Logs:\n{question.logs}")
+
+    return "\n\n".join(parts)

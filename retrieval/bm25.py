@@ -29,7 +29,7 @@ class BM25Retriever(BaseRetriever):
             observer_docs: list[RetrievedDocument] = []
 
             for doc in documents:
-                observer_docs.append(RetrievedDocument(chunk_id=doc.metadata.get("chunk_id"), source=doc.metadata.get("source"), score=None))
+                observer_docs.append(RetrievedDocument(chunk_id=doc.metadata.get("chunk_id"), source=doc.metadata.get("source"), document_type=doc.metadata.get("corpus"), retriever_score=None))
 
             observer.record_stage("BM25 Retriever", (end_time - start_time), self._bm25_index.k, observer_docs)
 
