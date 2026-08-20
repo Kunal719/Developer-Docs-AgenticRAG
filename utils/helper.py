@@ -23,9 +23,14 @@ def calculate_estimated_cost(
 
     return round(input_cost + output_cost, 8)
 
-def build_evaluation_query(question: BenchmarkQuestion) -> str:
+def build_evaluation_query(question: BenchmarkQuestion, include_queries: bool = True) -> str:
     parts = [question.question]
 
+    if include_queries and question.queries:
+        parts.append("Queries:")
+        for query in question.queries:
+            parts.append(f"- {query}")
+    
     if question.code_snippet:
         parts.append(f"Code:\n```python\n{question.code_snippet}\n```")
 
@@ -41,4 +46,12 @@ def build_evaluation_query(question: BenchmarkQuestion) -> str:
     if question.logs:
         parts.append(f"Logs:\n{question.logs}")
 
+    if question.evidence:
+        parts.append("Evidence:")
+        for item in question.evidence:
+            parts.append(
+                f"EVIDENCE {item['id']} — {item['title']}\n"
+                f"{item['content']}"
+            )
+        
     return "\n\n".join(parts)

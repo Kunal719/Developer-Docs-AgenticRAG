@@ -1,16 +1,19 @@
 from dotenv import load_dotenv
 from pathlib import Path
 
-from ingestion.embedding_model import get_embedding_model
 from pipeline.initialization import initialize_resources
 from pipeline.build_rag_pipeline import build_rag_pipeline
 from pipeline.prepare_retrieval_resources import prepare_retrieval_resources
 
+from ingestion.embedding_model import get_embedding_model
 from ingestion.markdown_parser import load_documents, load_selected_documents
 from ingestion.metadata_extractor import extract_metadata
-
+from ingestion.code_chunker import chunk_python_documents
+from ingestion.chunker import chunk_documents
 from ingestion.python_loader import load_python_documents, load_selected_python_documents
 from ingestion.code_metadata_extractor import extract_code_metadata
+
+from retrieval.multi_query_retrieval_strategy import MultiQueryRetrievalStrategy
 
 from config import (
     GITHUB_DOC_REPO_URL,
@@ -31,7 +34,9 @@ from config import (
     CODE_INDEX_PATH,
     JUDGE_MODEL_PROVIDER,
     JUDGE_MODEL_NAME,
-    JUDGE_TEMP
+    JUDGE_TEMP,
+    RRF_K,
+    MULTI_QUERY_TOP_K
 )
 
 from evaluation.benchmark_runner import BenchmarkRunner
@@ -78,7 +83,8 @@ def main() -> None:
             index_path=DOC_INDEX_PATH,
             loader=load_documents,
             selected_loader=load_selected_documents,
-            metadata_extractor=extract_metadata
+            metadata_extractor=extract_metadata,
+            chunker=chunk_documents
         )
         print("Documentation corpus ready\n")
 
@@ -104,7 +110,8 @@ def main() -> None:
             index_path=CODE_INDEX_PATH,
             loader=load_python_documents,
             selected_loader=load_selected_python_documents,
-            metadata_extractor=extract_code_metadata
+            metadata_extractor=extract_code_metadata,
+            chunker=chunk_python_documents
         )
         print("Implementation corpus ready\n")
         
@@ -115,16 +122,24 @@ def main() -> None:
             code_bm25_index=code_bm25_index
         )
 
+        multi_query_retriever = MultiQueryRetrievalStrategy(
+            retriever=multi_corpus_retriever,
+            top_k=MULTI_QUERY_TOP_K,
+            rrf_k=RRF_K
+        )
+
         # Get judge LLM
-        judge_llm = get_llm(model_name=JUDGE_MODEL_NAME, model_provider=JUDGE_MODEL_PROVIDER, max_tokens=2000, temperature=JUDGE_TEMP)
+        judge_llm = get_llm(model_name=JUDGE_MODEL_NAME, model_provider=JUDGE_MODEL_PROVIDER, max_tokens=5000, temperature=JUDGE_TEMP)
 
         print("\nRunning benchmark...")
         benchmark_runner = BenchmarkRunner(
             retriever=multi_corpus_retriever,
+            multi_query_retriever=None,
             llm=llm,
             judge_llm=judge_llm,
-            questions_path=Path("evaluation/questions/benchmark_debugging.json"),
-            reranker=cross_encoder_reranker
+            questions_path=Path("evaluation/questions/testing.json"),
+            reranker=cross_encoder_reranker,
+            retrieval_only=True
         )
 
         results = benchmark_runner.run()

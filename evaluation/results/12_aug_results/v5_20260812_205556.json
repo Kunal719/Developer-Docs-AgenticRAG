@@ -1,0 +1,731 @@
+[
+    {
+        "question": {
+            "id": 43,
+            "category": "architecture",
+            "intent": "multi_agent_system",
+            "difficulty": "hard",
+            "question": "Design a multi-agent research system where one agent plans, another retrieves information, a third summarizes findings, and a reviewer validates the final answer. Explain how the agents communicate and coordinate.",
+            "expected_files": [
+                "workflows-agents.mdx",
+                "graph-api.mdx",
+                "use-graph-api.mdx",
+                "agentic-rag.mdx",
+                "use-subgraphs.mdx"
+            ],
+            "concepts": [
+                "multi-agent",
+                "agent communication",
+                "workflow design",
+                "StateGraph",
+                "Command",
+                "human-in-the-loop"
+            ],
+            "tags": [
+                "multi-agent",
+                "agent-communication",
+                "workflow-orchestration",
+                "StateGraph",
+                "Command",
+                "subgraphs",
+                "agentic-rag",
+                "reviewer-agent"
+            ],
+            "code_snippet": null,
+            "observed_behavior": null,
+            "expected_behavior": null,
+            "error": null,
+            "logs": null,
+            "evidence": null,
+            "queries": [
+                "How should a LangGraph multi-agent system coordinate separate planning, retrieval, summarization, and review agents?",
+                "How can LangGraph StateGraph be used to design a workflow where multiple agents communicate through shared state?",
+                "How can LangGraph agents communicate and pass information between different workflow stages?",
+                "How can subgraphs be used to compose independent agents into a multi-agent LangGraph workflow?",
+                "How can Command be used for routing and coordination between agents in LangGraph?",
+                "How should a reviewer agent validate or refine the output of other agents in a LangGraph multi-agent system?"
+            ]
+        },
+        "experiment_metadata": {
+            "version": "v5",
+            "timestamp": "2026-08-12T20:55:14.134186",
+            "embedding_model": "text-embedding-3-small",
+            "llm_provider": "openai",
+            "llm": "gpt-5.6-luna",
+            "chunk_size": 1200,
+            "chunk_overlap": 200,
+            "dense_top_k": 10,
+            "bm25_top_k": 10,
+            "hybrid_top_k": 12,
+            "rrf_k": 60,
+            "reranker_top_k": 8,
+            "reranker_name": "BAAI/bge-reranker-base",
+            "judge_model": "gpt-4o-mini",
+            "judge_provider": "openai"
+        },
+        "pipeline_stages": [
+            {
+                "name": "Dense Retriever",
+                "latency": 2.539398599998094,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "c7d8f1f4f5f29fb691dfcfa72c1865112da63318efd17f2e11ed294d9d45dcc2",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8a6a8694978fc815b7652a569181e08493858cb434986df78d04ecfe7ee42134",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c0287e5e8975e762f465de5a9ccef1879006c8a0368ca7ffc38fb514ecbc6b72",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ac1c2fc3bf7cfd682e154b0d783058fd3c75b865132aa47819fa6c1b5ea9dd84",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ef26bca64344dcc1f5af7d1637886e7954c42c9b414f5a82ae50e41c4b76ee8a",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "cca8a2ced9d523cca2b0e7a4af86344072ba52208eba212d151f8f5d7503bf6a",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "69cf532f6430d6a7e7aeb23e67c558c1ce36cec4cb4f45530aa6ed7f60aa5111",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b9f79b1e04625f070cade37f19cbcbff03f517f8a0bc90031d631e81d526db64",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "12177d28d30df3df291dae98eafc1b573db6e5417f410ca53af56b5bf7e8f59b",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1a5f8f96be4b89a9f3d095ce9097bbc4ee53aeb9a5360d8c0e50d6357dfe166c",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.03541150000091875,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "d1003253d7c0f0ec72a7af07b6dd231bb060d9e7785e75093a9dbfb1d5999dbb",
+                        "source": "frontend/graph-execution.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d5994d5557edc0695f4498b93415e513f51c798abb24c570c11c1fccb10b05a3",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7f2cfef400e83c3fccf5edb05fdcf5ab921873451372dab87aa71d7bf033b77b",
+                        "source": "application-structure.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "e71690ff320085c6b04021a929d5ef6f2e5a304e707d7eff7a4e8e1b53cc6386",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "12177d28d30df3df291dae98eafc1b573db6e5417f410ca53af56b5bf7e8f59b",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b9f79b1e04625f070cade37f19cbcbff03f517f8a0bc90031d631e81d526db64",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "69cf532f6430d6a7e7aeb23e67c558c1ce36cec4cb4f45530aa6ed7f60aa5111",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2dec431ac77edadca5c0706852a02ca26882b3140d29823f3fd748d5b4623c6c",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4dad9c09dc065859821f96fbe228dc3fc5148f8e51e0a2ec55b4c851e6fa71b9",
+                        "source": "frontend/custom-stream-channels.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d086f325b1fe8b8185d28acc2a1f180192280ff5317970b1486011e46fd1f15c",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.839999746764079e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "12177d28d30df3df291dae98eafc1b573db6e5417f410ca53af56b5bf7e8f59b",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.029877369007803793,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "b9f79b1e04625f070cade37f19cbcbff03f517f8a0bc90031d631e81d526db64",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.029857397504456328,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "69cf532f6430d6a7e7aeb23e67c558c1ce36cec4cb4f45530aa6ed7f60aa5111",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.029850746268656716,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "c7d8f1f4f5f29fb691dfcfa72c1865112da63318efd17f2e11ed294d9d45dcc2",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "d1003253d7c0f0ec72a7af07b6dd231bb060d9e7785e75093a9dbfb1d5999dbb",
+                        "source": "frontend/graph-execution.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "8a6a8694978fc815b7652a569181e08493858cb434986df78d04ecfe7ee42134",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "d5994d5557edc0695f4498b93415e513f51c798abb24c570c11c1fccb10b05a3",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "c0287e5e8975e762f465de5a9ccef1879006c8a0368ca7ffc38fb514ecbc6b72",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "7f2cfef400e83c3fccf5edb05fdcf5ab921873451372dab87aa71d7bf033b77b",
+                        "source": "application-structure.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "ac1c2fc3bf7cfd682e154b0d783058fd3c75b865132aa47819fa6c1b5ea9dd84",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "e71690ff320085c6b04021a929d5ef6f2e5a304e707d7eff7a4e8e1b53cc6386",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "ef26bca64344dcc1f5af7d1637886e7954c42c9b414f5a82ae50e41c4b76ee8a",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 0.9166695000021718,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "49cf0069b903cb1ce54dfb6ab3ec2a4528b78e2435c49a1aa5204e1d05997453",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0cdee37ca79ece99349da1d96983daa39c367483ef049f55213763bf9c5c7a40",
+                        "source": "checkpoint-sqlite/langgraph/checkpoint/sqlite/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4dd76acf01f8d8e6a6a88b4cb4c2c231d282ac797a3d28daa738f15474d23897",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "26a3551a189dc3986c9803107c2647468d58ae727f975657792a18b12716beed",
+                        "source": "langgraph/langgraph/graph/message.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "fe60a2bd1ce9a97cff985b763b66980bb04d0a941b646849d6b266d336a77ff5",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ae45e238ccded04de5f33ffa13bf4c65f6195dc5057358091a5492aec1c0f14b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0b44b7b4a0e798acfde3c03c862a327777f308564cc3f15aa791e8286428aefd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "eabf51095c40977f9b3d22a9af4c2b004cc388897b177b269db2c6c82b771b2e",
+                        "source": "langgraph/langgraph/graph/message.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8a1315352bffa99c9abd8cc413f15e5badb567fd1a4e4c1f95fd42466fe1e77e",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "593c68848443bc33563a86c4fa7342c7574457ee7a048978d237a0ea28fcfc7c",
+                        "source": "langgraph/langgraph/graph/message.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.027738299999327864,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "2b753831db6a90d8692b66730c83ba70444aa3d0628ba6ce81bc21b24654dd4c",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8d489caa97d0f36e59833f108e0aa3406eb0a610106db8f7236ba09505b83f49",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "84f1208433be4459eadbe53219c0a9eb1dca927937b9c27d14f12d88cbc0fdab",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7af97358f328fc6397207ce29386d69af375419371aa0738bc0c48f0b8d6a15f",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "49cf0069b903cb1ce54dfb6ab3ec2a4528b78e2435c49a1aa5204e1d05997453",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c240239a40b3bc7103720ff731131fd2acdb08a82e1999e3494df452c9b40772",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "cc71e43af3653e1ca72e7f412508a9949e9e603d2c4976d78b86ff80b07737cc",
+                        "source": "langgraph/langgraph/func/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "965987f2ba5f4dc1f935c95a0d3bcdb07be7c8aee124ad20a5cf911337d60e7c",
+                        "source": "checkpoint/langgraph/store/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9f6a33df45622e6d09d70168f1b7e3549d26ec901caa1037466dd048f718358a",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "350f88b2a7f6978b90b87b4c1bfbdc614d0925ea40fc4bf23525cede28858e41",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.13999987358693e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "49cf0069b903cb1ce54dfb6ab3ec2a4528b78e2435c49a1aa5204e1d05997453",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03177805800756621,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "2b753831db6a90d8692b66730c83ba70444aa3d0628ba6ce81bc21b24654dd4c",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "0cdee37ca79ece99349da1d96983daa39c367483ef049f55213763bf9c5c7a40",
+                        "source": "checkpoint-sqlite/langgraph/checkpoint/sqlite/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "8d489caa97d0f36e59833f108e0aa3406eb0a610106db8f7236ba09505b83f49",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "4dd76acf01f8d8e6a6a88b4cb4c2c231d282ac797a3d28daa738f15474d23897",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "84f1208433be4459eadbe53219c0a9eb1dca927937b9c27d14f12d88cbc0fdab",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "26a3551a189dc3986c9803107c2647468d58ae727f975657792a18b12716beed",
+                        "source": "langgraph/langgraph/graph/message.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "7af97358f328fc6397207ce29386d69af375419371aa0738bc0c48f0b8d6a15f",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "fe60a2bd1ce9a97cff985b763b66980bb04d0a941b646849d6b266d336a77ff5",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "ae45e238ccded04de5f33ffa13bf4c65f6195dc5057358091a5492aec1c0f14b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "c240239a40b3bc7103720ff731131fd2acdb08a82e1999e3494df452c9b40772",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "0b44b7b4a0e798acfde3c03c862a327777f308564cc3f15aa791e8286428aefd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 19.717835999999807,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "c0287e5e8975e762f465de5a9ccef1879006c8a0368ca7ffc38fb514ecbc6b72",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.5594978928565979,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "69cf532f6430d6a7e7aeb23e67c558c1ce36cec4cb4f45530aa6ed7f60aa5111",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.5163385272026062,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "ef26bca64344dcc1f5af7d1637886e7954c42c9b414f5a82ae50e41c4b76ee8a",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.4303106367588043,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "4dd76acf01f8d8e6a6a88b4cb4c2c231d282ac797a3d28daa738f15474d23897",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.41297656297683716,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "12177d28d30df3df291dae98eafc1b573db6e5417f410ca53af56b5bf7e8f59b",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.4126157760620117,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "0cdee37ca79ece99349da1d96983daa39c367483ef049f55213763bf9c5c7a40",
+                        "source": "checkpoint-sqlite/langgraph/checkpoint/sqlite/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.38631075620651245,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "0b44b7b4a0e798acfde3c03c862a327777f308564cc3f15aa791e8286428aefd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.3823204040527344,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "b9f79b1e04625f070cade37f19cbcbff03f517f8a0bc90031d631e81d526db64",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.35929641127586365,
+                        "rank": 8
+                    }
+                ]
+            }
+        ],
+        "generation_metrics": {
+            "answer": "## Supported design\n\nLangGraph is a low-level orchestration framework for building stateful agents. Its graph model is based on:\n\n- **Nodes**: discrete processing steps\n- **Shared state**: data nodes can read and write\n- **Edges**: transitions between nodes\n- **Conditional edges**: transitions chosen according to the workflow state\n\nThese concepts are explicitly used in the LangGraph Graph API and in the “Thinking in LangGraph” documentation.\n\nA multi-agent research workflow can therefore be modeled as:\n\n```text\nSTART\n  ↓\nPlanner\n  ↓\nRetriever\n  ↓\nSummarizer\n  ↓\nReviewer\n  ├── approved → END\n  └── needs_revision → Summarizer or Retriever\n```\n\nThe planner, retriever, summarizer, and reviewer can each be represented as separate nodes. The graph state carries the plan, retrieved material, draft answer, and review result from one stage to the next.\n\n## Example shared state\n\nThe shared state could conceptually contain fields such as:\n\n```text\nresearch question\nresearch plan\nretrieved documents\ndraft summary\nreview decision\nreview feedback\n```\n\nThe exact state schema and field names are application-specific; the retrieved context does not prescribe a particular schema.\n\nThe communication pattern is:\n\n1. The **planner** reads the research question and writes a research plan.\n2. The **retriever** reads the plan and writes retrieved information.\n3. The **summarizer** reads the retrieved information and writes a draft answer.\n4. The **reviewer** reads the draft and supporting information, then writes a validation result and, if needed, feedback.\n5. A conditional transition uses the review result to either finish or send the work back for revision.\n\nThis is a direct application of the documented model in which nodes read from and write to shared state. The exact routing behavior is an inference from the documented existence of edges and conditional edges.\n\n## Using `StateGraph`\n\nThe retrieved examples show that `StateGraph` can define nodes and connect them with edges. For example:\n\n```python\nfrom typing_extensions import TypedDict\nfrom langgraph.graph import StateGraph, START\n\nclass ResearchState(TypedDict):\n    question: str\n    plan: str\n    findings: list\n    draft: str\n    review: str\n\ndef planner(state: ResearchState):\n    # Produce a plan from state[\"question\"]\n    ...\n\ndef retriever(state: ResearchState):\n    # Retrieve information using state[\"plan\"]\n    ...\n\ndef summarizer(state: ResearchState):\n    # Create a draft from state[\"findings\"]\n    ...\n\ndef reviewer(state: ResearchState):\n    # Validate state[\"draft\"]\n    ...\n\nbuilder = StateGraph(ResearchState)\n\nbuilder.add_node(\"planner\", planner)\nbuilder.add_node(\"retriever\", retriever)\nbuilder.add_node(\"summarizer\", summarizer)\nbuilder.add_node(\"reviewer\", reviewer)\n\nbuilder.add_edge(START, \"planner\")\nbuilder.add_edge(\"planner\", \"retriever\")\nbuilder.add_edge(\"retriever\", \"summarizer\")\nbuilder.add_edge(\"summarizer\", \"reviewer\")\n```\n\nThe retrieved context supports the use of `StateGraph`, `add_node`, `add_edge`, and `START`. It also documents conditional edges conceptually, but it does not provide the exact API syntax for adding a conditional edge or declaring the terminal node. Therefore, the final approval/revision routing should be implemented using the conditional-edge API documented for the specific LangGraph version.\n\n## Agent communication between stages\n\nAgents do not need to call each other directly. Instead, they communicate through the graph’s shared state:\n\n```text\nplanner writes:   plan\nretriever reads:  plan\nretriever writes: findings\nsummarizer reads: findings\nsummarizer writes: draft\nreviewer reads:   draft and findings\nreviewer writes:  review and feedback\n```\n\nThis shared-state approach is supported by the documentation’s description that nodes read from and write to shared state.\n\nAn inference is that this separates agent responsibilities: each agent can focus on its own task while the graph controls sequencing and routing.\n\n## Reviewer behavior\n\nA reviewer node can validate the draft against the retrieved findings and write a result such as:\n\n```text\nreview = \"approved\"\n```\n\nor:\n\n```text\nreview = \"needs_revision\"\nfeedback = \"The answer is missing supporting evidence.\"\n```\n\nThe graph can then use a conditional transition:\n\n```text\nreview == \"approved\"        → END\nreview == \"needs_revision\"  → summarizer\n```\n\nAlternatively, feedback could be routed back to the retriever if the reviewer determines that the evidence is insufficient.\n\nThe retrieved context does not define a built-in reviewer-agent protocol or a required validation schema. Thus, the approval criteria, feedback format, and revision loop are application-level design decisions.\n\n## Subgraphs\n\nThe retrieved context establishes that LangGraph supports graph-based composition and that LangGraph is intended for orchestrating discrete nodes and transitions. However, it does not provide documentation or implementation details for **subgraphs** specifically.\n\nTherefore:\n\n- It is reasonable to view an independently compiled agent workflow as a candidate component in a larger workflow.\n- The retrieved context does **not** establish the exact API for embedding one graph inside another.\n- It does not specify how state is mapped between a parent graph and a subgraph.\n\nThe exact subgraph composition pattern cannot be determined from the supplied context.\n\n## `Command`\n\nThe supplied context does not document the `Command` class or function, its parameters, or its routing semantics. Consequently, it would be unsupported to provide a `Command`-based implementation or claim how it coordinates agents.\n\nThe documented alternative is to coordinate agents with:\n\n- shared state,\n- ordinary edges for fixed sequencing, and\n- conditional edges for approval, revision, or alternate routing.\n\n## Overall architecture\n\nA supported high-level architecture is:\n\n```text\nResearchState\n    │\n    ├── Planner node\n    │       writes plan\n    │\n    ├── Retriever node\n    │       reads plan\n    │       writes findings\n    │\n    ├── Summarizer node\n    │       reads findings\n    │       writes draft\n    │\n    └── Reviewer node\n            reads draft and findings\n            writes review result\n                    │\n          ┌─────────┴─────────┐\n          │                   │\n       approved          needs revision\n          │                   │\n         END        summarizer or retriever\n```\n\nThis uses the documented LangGraph primitives—state, nodes, edges, and conditional edges—to coordinate specialized agents. The exact implementation of subgraphs and `Command` is not determined by the retrieved context.",
+            "answer_length": 6622,
+            "prompt_tokens": 2826,
+            "completion_tokens": 1506,
+            "total_tokens": 4332,
+            "estimated_cost": 0.0023724,
+            "generation_latency": 39.917890499997156
+        },
+        "overall_metrics": {
+            "total_latency": 39.917918500003,
+            "total_cost": 0.00320445,
+            "recall_at_k": 0.6,
+            "precision_at_k": 0.16666666666666666,
+            "hit_rate": 1.0,
+            "mrr": 0.5
+        },
+        "judge_evaluation": {
+            "correctness": {
+                "score": 5.0,
+                "justification": "The generated answer accurately describes a multi-agent research system using the concepts of nodes, shared state, and edges as outlined in the retrieved context."
+            },
+            "groundedness": {
+                "score": 5.0,
+                "justification": "All significant claims in the answer are well supported by the retrieved context, including the use of StateGraph and the communication patterns between agents."
+            },
+            "completeness": {
+                "score": 5.0,
+                "justification": "The answer thoroughly addresses all important aspects of the user's question, including agent roles, communication, and workflow design."
+            },
+            "hallucination": {
+                "score": 0.0,
+                "justification": "There are no unsupported or fabricated claims in the answer; all details are grounded in the retrieved context."
+            },
+            "missing_concepts": [],
+            "unsupported_claims": []
+        }
+    }
+]

@@ -23,7 +23,7 @@ from config import (
     CHUNK_SIZE, 
     DENSE_TOP_K, 
     BM25_TOP_K, 
-    HYBRID_TOP_K, 
+    CODE_HYBRID_TOP_K, 
     RRF_K, 
     RERANK_TOP_K,
     RERANKER_MODEL,
@@ -36,12 +36,24 @@ from pathlib import Path
 from datetime import datetime
 
 class BenchmarkRunner():
-    def __init__(self, retriever: BaseRetriever, llm: BaseChatModel, judge_llm: BaseChatModel, questions_path: Path, reranker: BaseReranker | None = None):
+    def __init__(
+            self, 
+            retriever: BaseRetriever, 
+            llm: BaseChatModel, 
+            judge_llm: BaseChatModel, 
+            questions_path: Path, 
+            reranker: BaseReranker | None = None, 
+            retrieval_only: bool = False,
+            multi_query_retriever = None
+            ):
+        
         self._retriever = retriever
         self._reranker = reranker
         self._llm = llm
         self._judge_llm = judge_llm
         self._questions_path = questions_path
+        self._retrieval_only = retrieval_only
+        self._multi_query_retriever = multi_query_retriever
 
     def run(self) -> list[EvaluationResult]:
         experiment_metadata = ExperimentMetadata(
@@ -54,7 +66,7 @@ class BenchmarkRunner():
             chunk_overlap=CHUNK_OVERLAP,
             dense_top_k=DENSE_TOP_K,
             bm25_top_k=BM25_TOP_K,
-            hybrid_top_k=HYBRID_TOP_K,
+            hybrid_top_k=CODE_HYBRID_TOP_K,
             rrf_k=RRF_K,
             reranker_top_k=RERANK_TOP_K if self._reranker is not None else None,
             reranker_name=RERANKER_MODEL if self._reranker is not None else None,
@@ -68,7 +80,15 @@ class BenchmarkRunner():
         if self._reranker is None:
             chain = build_hybrid_rag_chain(self._retriever, self._llm, rag_prompt, observer=observer)
         else:
-            chain = build_rag_chain(self._retriever, self._reranker, self._llm, rag_prompt, observer=observer)
+            chain = build_rag_chain(
+                self._retriever, 
+                self._reranker, 
+                self._llm, 
+                rag_prompt, 
+                observer=observer, 
+                retrieval_only=self._retrieval_only,
+                multi_query_retriever=self._multi_query_retriever
+            )
 
         results : list[EvaluationResult] = []
         retrieval_evaluator = RetrievalEvaluator()
@@ -77,22 +97,41 @@ class BenchmarkRunner():
 
         for question in questions:
             observer.reset()
-            evaluation_query = build_evaluation_query(question)
+
+            if self._multi_query_retriever is not None:
+                reranker_query = build_evaluation_query(question, include_queries=False)
+                retrieval_input = question.queries
+            else:
+                reranker_query = build_evaluation_query(question, include_queries=True)
+                retrieval_input = reranker_query
+
+            chain_input = {
+                "retrieval": retrieval_input,
+                "reranker_query": reranker_query
+            }
 
             start = perf_counter()
-            answer = invoke_chain(chain, evaluation_query, observer)
+            answer = invoke_chain(chain, chain_input, observer, self._retrieval_only)
             end = perf_counter()
 
-            generation_metrics = observer.get_generation_metrics()
+            if self._retrieval_only:
+                generation_metrics = None
+                judge_evaluation = None
+                judge_cost = {"estimated_cost": 0.0}
+            else:
+                generation_metrics = observer.get_generation_metrics()
+                judge_evaluation, judge_cost = judge.evaluate(question, observer.get_context(), generation_metrics.answer)
+
             pipeline_stages = observer.get_pipeline_stages()
 
             retrieval_metrics = retrieval_evaluator.evaluate(question, pipeline_stages)
 
-            judge_evaluation, judge_cost = judge.evaluate(question, observer.get_context(), generation_metrics.answer)
-
             overall_metrics = OverallMetrics(
                 total_latency=(end - start),
-                total_cost=generation_metrics.estimated_cost + judge_cost["estimated_cost"],
+                total_cost=(
+                    0.0 if self._retrieval_only 
+                    else generation_metrics.estimated_cost + judge_cost["estimated_cost"]
+                ),
                 recall_at_k=retrieval_metrics["recall_at_k"],
                 precision_at_k=retrieval_metrics["precision_at_k"],
                 hit_rate=retrieval_metrics["hit_rate"],

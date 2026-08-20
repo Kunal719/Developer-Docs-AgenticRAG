@@ -1,0 +1,732 @@
+[
+    {
+        "question": {
+            "id": 18,
+            "category": "debugging",
+            "intent": "checkpoint_deserialization",
+            "difficulty": "very_hard",
+            "question": "A LangGraph application uses persistent checkpoints and is deployed across application versions. After a deployment, an existing workflow resumes successfully from a checkpoint, but some state values that were previously custom Python objects are now represented as plain dictionaries. The workflow does not immediately fail, but later behavior becomes incorrect because code expects the original object type. Review the persistence, checkpointing, backward-compatibility, and serializer implementation and determine whether this behavior is caused by checkpoint restoration, serializer compatibility, or graph execution. Explain: 1. How LangGraph serializes state into checkpoints and restores it during execution. 2. What happens when checkpoint data contains a type that the current runtime cannot deserialize or no longer recognizes. 3. Whether deserialization necessarily fails with an exception or can produce a fallback representation such as a dictionary. 4. How changes to application-defined/custom types across deployments can affect previously persisted checkpoints. 5. Why a workflow can resume successfully while still having semantically corrupted or incomplete state. 6. What role the checkpoint serializer and its type-registration/import mechanisms play in this behavior. 7. How backward compatibility should be considered when deploying a new application version against existing checkpoints. 8. Recommend a safe design or deployment strategy for handling persisted state whose Python types may change between versions.",
+            "expected_files": [
+                "persistence.mdx",
+                "checkpointers.mdx",
+                "backward-compatibility.mdx",
+                "checkpoint/langgraph/checkpoint/serde/base.py",
+                "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                "checkpoint/langgraph/checkpoint/serde/encrypted.py",
+                "langgraph/langgraph/pregel/_checkpoint.py"
+            ],
+            "concepts": [
+                "checkpoint persistence",
+                "checkpoint serialization",
+                "deserialization",
+                "JsonPlusSerializer",
+                "custom types",
+                "type compatibility",
+                "backward compatibility",
+                "checkpoint restoration",
+                "state corruption",
+                "deployment compatibility"
+            ],
+            "tags": [
+                "checkpoint_deserialization",
+                "serializer_compatibility",
+                "custom_types",
+                "backward_compatibility",
+                "persisted_state",
+                "checkpoint_restore",
+                "jsonplus",
+                "deployment"
+            ],
+            "code_snippet": null,
+            "observed_behavior": null,
+            "expected_behavior": null,
+            "error": null,
+            "logs": null,
+            "evidence": null,
+            "queries": null
+        },
+        "experiment_metadata": {
+            "version": "v5",
+            "timestamp": "2026-08-12T23:54:10.861086",
+            "embedding_model": "text-embedding-3-small",
+            "llm_provider": "openai",
+            "llm": "gpt-5.6-luna",
+            "chunk_size": 1200,
+            "chunk_overlap": 200,
+            "dense_top_k": 10,
+            "bm25_top_k": 10,
+            "hybrid_top_k": 12,
+            "rrf_k": 60,
+            "reranker_top_k": 8,
+            "reranker_name": "BAAI/bge-reranker-base",
+            "judge_model": "gpt-4o-mini",
+            "judge_provider": "openai"
+        },
+        "pipeline_stages": [
+            {
+                "name": "Dense Retriever",
+                "latency": 2.4341572999983327,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "2b0026faf93c686d061fabe384a412d28e3bcb4f7cb81a17c2f2adf91a5a7ce1",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1fc4037e19fdd4ce9eb69553db99e80c9e0cf24fefdcdba6843583d302e37e7c",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "003ef9cf01d8e9ce0c478509eb08345a1f69bee7fa58ce6966350f71cf240a37",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b06bfbcb9527e0b937d9722525cd4124fe0bad57bae90a8084a0c2d3633f0525",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7f0c0a8c548ac560e6cbf27e9d795100af09b3ebc6cfa52c46c3aee1889041c4",
+                        "source": "errors/MISSING_CHECKPOINTER.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "04ee2fa7853eb72dae853fd3fd9c208bec68399e9d904bc9229adc4d69d134eb",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d1e163c3e1f1f1fb34c41bd179ab98cf8811f2d6498ca869fcbfca457f2660ff",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8ac2907a1e43efa0774af2d6f439ee9a6c1b059407a87b9c783b836dee258ef5",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "e10b7840e5fab56a01dc09e876e5b7bbebc857dbd8f904d10074af748674c937",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "48e00f651f078fd9d0d10021f5baeb7d35a4fcaf690f2035c57142815b23a26d",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.055726300000969786,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "f15507aa8c5af2c52d76accae17c4f103bf94940bcca6777f132986e1df1f319",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f02ebe82f0bba5212ead3d47a0f4af010050b57ef3c807e8f049f03842836bcf",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0e7adf789e6cee1ccdefdcafd0ec309f565ca121973500fd70f05e48f8e7b4fe",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2b0026faf93c686d061fabe384a412d28e3bcb4f7cb81a17c2f2adf91a5a7ce1",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ee127940155ac67f7384d0b8138408957b5b78f06be3aa08697b09c6cbe2aa9f",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "04ee2fa7853eb72dae853fd3fd9c208bec68399e9d904bc9229adc4d69d134eb",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f5a5dfa3d777cdf4a45f15970dbd459820e8c68275c4e105ba265eda53bd40f9",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "74e7ecc9229f5013d45a844ee3ad6fd657d48799a025d83b02e5ffac61b3cffd",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7d93d3fd738937944c6c79f9973cb7bb2fef5411f46b958b3fa22a3d0b6f3e73",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b5fa1ce596857ad02024296987954c48ed1f4fe5ed5910f3eac38eb284762b32",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.8300003982149065e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "2b0026faf93c686d061fabe384a412d28e3bcb4f7cb81a17c2f2adf91a5a7ce1",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.032018442622950824,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "04ee2fa7853eb72dae853fd3fd9c208bec68399e9d904bc9229adc4d69d134eb",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.030303030303030304,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "f15507aa8c5af2c52d76accae17c4f103bf94940bcca6777f132986e1df1f319",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "1fc4037e19fdd4ce9eb69553db99e80c9e0cf24fefdcdba6843583d302e37e7c",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "f02ebe82f0bba5212ead3d47a0f4af010050b57ef3c807e8f049f03842836bcf",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "003ef9cf01d8e9ce0c478509eb08345a1f69bee7fa58ce6966350f71cf240a37",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "0e7adf789e6cee1ccdefdcafd0ec309f565ca121973500fd70f05e48f8e7b4fe",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "b06bfbcb9527e0b937d9722525cd4124fe0bad57bae90a8084a0c2d3633f0525",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "7f0c0a8c548ac560e6cbf27e9d795100af09b3ebc6cfa52c46c3aee1889041c4",
+                        "source": "errors/MISSING_CHECKPOINTER.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "ee127940155ac67f7384d0b8138408957b5b78f06be3aa08697b09c6cbe2aa9f",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "d1e163c3e1f1f1fb34c41bd179ab98cf8811f2d6498ca869fcbfca457f2660ff",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "f5a5dfa3d777cdf4a45f15970dbd459820e8c68275c4e105ba265eda53bd40f9",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 0.4877300000007381,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "8a1315352bffa99c9abd8cc413f15e5badb567fd1a4e4c1f95fd42466fe1e77e",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0cdee37ca79ece99349da1d96983daa39c367483ef049f55213763bf9c5c7a40",
+                        "source": "checkpoint-sqlite/langgraph/checkpoint/sqlite/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f450ae75d2030e34d70f8ec770f72a5227cacd2f6003d40766b8398a1e709062",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0b44b7b4a0e798acfde3c03c862a327777f308564cc3f15aa791e8286428aefd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b1067e79c40d81d99eeca62c1cf2e7e6c4a6f15926a7f202836d2cf3d027d8f4",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3e292fb29cb08796ec9db1661d7da3cea29a42dc3e3d7f9fe642cd3e2d92aa06",
+                        "source": "checkpoint-sqlite/langgraph/checkpoint/sqlite/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "eda2ffa78e094c64646954d5fc509c70561b5b8c64ab35c6b126c437205a3f91",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1e48b8397a85304dbe392391f5bf37c08b9b65d66a15d66fa7ada3a1223b9b1c",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "bf5af091b765220f6a8cd1a14bbfac690770dd7f6c9e4a22655c2154e0601b6c",
+                        "source": "checkpoint-postgres/langgraph/checkpoint/postgres/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "44ee926e58abdbc7da564de2fbbcbd9069bcfa5584b8537f4a9c2277cfa2ec5b",
+                        "source": "langgraph/langgraph/func/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.04094349999650149,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "1a6453a609464bb8b4a8c3de0683e72af5fbcf129a7f58f33ba167350bc9046a",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "41f9ed58333d1a8616e7bf7cf4a171a6c4c675f46672ba36d189a55a91d6f87d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8d489caa97d0f36e59833f108e0aa3406eb0a610106db8f7236ba09505b83f49",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "10f26dc2623e85b38d82473494d425c1306e91d39ffaa0be50834c4b37991a07",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ce13bdbab667e84c30c7ca76aed8ffbcb34856c5ba8781aedf98ef474e8916d8",
+                        "source": "langgraph/langgraph/func/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f579f4120cd947a97d1d92e43bdb035715c438a861f2a8b88cc993913af19d16",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "778657b1c00e9c4d4662789f0c470b527736716905a5a643837169233212ad9c",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7af97358f328fc6397207ce29386d69af375419371aa0738bc0c48f0b8d6a15f",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "221b34105b5ec79a8d106063f02b00dad78b0d41fa8ca5e4e12fb46853b58f2a",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "fe60a2bd1ce9a97cff985b763b66980bb04d0a941b646849d6b266d336a77ff5",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.440000338945538e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "8a1315352bffa99c9abd8cc413f15e5badb567fd1a4e4c1f95fd42466fe1e77e",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "1a6453a609464bb8b4a8c3de0683e72af5fbcf129a7f58f33ba167350bc9046a",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "0cdee37ca79ece99349da1d96983daa39c367483ef049f55213763bf9c5c7a40",
+                        "source": "checkpoint-sqlite/langgraph/checkpoint/sqlite/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "41f9ed58333d1a8616e7bf7cf4a171a6c4c675f46672ba36d189a55a91d6f87d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "f450ae75d2030e34d70f8ec770f72a5227cacd2f6003d40766b8398a1e709062",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "8d489caa97d0f36e59833f108e0aa3406eb0a610106db8f7236ba09505b83f49",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "0b44b7b4a0e798acfde3c03c862a327777f308564cc3f15aa791e8286428aefd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "10f26dc2623e85b38d82473494d425c1306e91d39ffaa0be50834c4b37991a07",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "b1067e79c40d81d99eeca62c1cf2e7e6c4a6f15926a7f202836d2cf3d027d8f4",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "ce13bdbab667e84c30c7ca76aed8ffbcb34856c5ba8781aedf98ef474e8916d8",
+                        "source": "langgraph/langgraph/func/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "3e292fb29cb08796ec9db1661d7da3cea29a42dc3e3d7f9fe642cd3e2d92aa06",
+                        "source": "checkpoint-sqlite/langgraph/checkpoint/sqlite/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "f579f4120cd947a97d1d92e43bdb035715c438a861f2a8b88cc993913af19d16",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 19.56977330000518,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "f5a5dfa3d777cdf4a45f15970dbd459820e8c68275c4e105ba265eda53bd40f9",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9788967967033386,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "2b0026faf93c686d061fabe384a412d28e3bcb4f7cb81a17c2f2adf91a5a7ce1",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9515582323074341,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "b06bfbcb9527e0b937d9722525cd4124fe0bad57bae90a8084a0c2d3633f0525",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9489447474479675,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "ee127940155ac67f7384d0b8138408957b5b78f06be3aa08697b09c6cbe2aa9f",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9468154907226562,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "003ef9cf01d8e9ce0c478509eb08345a1f69bee7fa58ce6966350f71cf240a37",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9458394050598145,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "7f0c0a8c548ac560e6cbf27e9d795100af09b3ebc6cfa52c46c3aee1889041c4",
+                        "source": "errors/MISSING_CHECKPOINTER.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9417043328285217,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "0e7adf789e6cee1ccdefdcafd0ec309f565ca121973500fd70f05e48f8e7b4fe",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9244940876960754,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "0cdee37ca79ece99349da1d96983daa39c367483ef049f55213763bf9c5c7a40",
+                        "source": "checkpoint-sqlite/langgraph/checkpoint/sqlite/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9229379296302795,
+                        "rank": 8
+                    }
+                ]
+            }
+        ],
+        "generation_metrics": {
+            "answer": "Based on the retrieved context, this behavior cannot be attributed specifically to the serializer, checkpoint restoration, or graph execution. The context establishes how persistence works at a high level, but it does not include the serializer implementation or its type-registration/import logic.\n\n## 1. Serialization and restoration\n\n**Retrieved facts:**\n\n- A checkpoint is a snapshot of a thread’s graph state at a super-step boundary.\n- The checkpointer uses `thread_id` to store and retrieve checkpoints.\n- When a thread resumes, LangGraph deserializes the saved state and dispatches it to a node.\n- The resumed node is expected to return values compatible with the current state schema.\n- Node-level writes are also persisted for pending-writes recovery, but those writes are not full `StateSnapshot` checkpoints.\n\nThus, the documented flow is:\n\n1. State is persisted in a checkpoint associated with a `thread_id`.\n2. A later execution loads that checkpoint.\n3. LangGraph deserializes the saved state.\n4. The current deployed graph receives that state.\n5. The current nodes continue execution using the restored values.\n\nThe retrieved context does not specify the serialization format or the exact serialization/deserialization functions.\n\n## 2. What happens when a type is no longer recognized?\n\nThe backward-compatibility documentation states that, when a thread resumes, LangGraph deserializes the saved state and expects the current node and state schema to accept it.\n\nIt does **not** document what happens when a serialized application-defined type can no longer be imported, registered, or reconstructed. In particular, the context does not establish whether LangGraph:\n\n- raises an exception,\n- returns a dictionary,\n- returns another generic representation,\n- skips the value,\n- or applies some migration behavior.\n\nTherefore, the reported dictionary fallback cannot be confirmed as documented LangGraph behavior from the retrieved context.\n\n## 3. Is deserialization guaranteed to fail?\n\nNo such guarantee is supported by the retrieved material.\n\nThe context only says that deserialization occurs and that the current graph expects the resulting state to fit its schema. It does not say that every incompatibility raises an exception. Consequently, the possibility of successful deserialization into a less-specific representation, such as a dictionary, cannot be ruled out—but it is an **unsupported possibility**, not a documented behavior in the supplied context.\n\nThe important distinction is:\n\n- **Deserialization failure:** restoration raises an error and execution cannot continue.\n- **Semantically incompatible restoration:** restoration returns a value, but that value no longer has the type or structure expected by application code.\n\nThe second case would explain how execution could resume while later behavior is incorrect, but the retrieved context does not confirm that this is the mechanism used by the serializer.\n\n## 4. Effect of changing custom types\n\n**Retrieved fact:** LangGraph applies the latest deployed graph to both new threads and threads resumed from existing checkpoints. It does not pin a resumed run to the version of the graph that originally created the checkpoint.\n\nThe backward-compatibility documentation explicitly describes the persisted state as a compatibility contract between the graph code and the data already stored by the checkpointer. It also states that the current runtime deserializes saved state and dispatches it to current nodes.\n\nTherefore, changing an application-defined type can affect old checkpoints if the new deployment no longer interprets the persisted value in the same way. This is a direct consequence of the documented versioning model.\n\nWhether the particular change causes a dictionary, an exception, or another result is not determined by the supplied context.\n\n## 5. How execution can resume with incorrect state\n\nThis is a supported **inference** from the documented behavior:\n\n1. A checkpoint can be loaded and deserialized without an immediate exception.\n2. The latest graph is then run against that restored state.\n3. The current node may accept the value at the boundary—for example, because the state schema does not enforce the application’s deeper runtime assumptions.\n4. Later code may rely on methods, invariants, or object identity that the restored value does not provide.\n\nIn that situation, checkpoint restoration succeeds operationally, but the restored state is semantically incompatible. The workflow can therefore pass the resume point and fail or behave incorrectly later.\n\nThe context does not describe graph execution as converting custom objects into dictionaries. It only documents that the current graph receives deserialized state and continues execution.\n\n## 6. Role of the serializer and type registration/import mechanisms\n\nThe retrieved implementation excerpt only shows usage of `AsyncSqliteSaver`; it does not contain serializer code, registration APIs, import resolution, or fallback behavior.\n\nTherefore, the following details are **not determined by the retrieved context**:\n\n- how custom Python classes are encoded;\n- whether fully qualified class names are stored;\n- how classes are imported during restoration;\n- whether classes must be registered;\n- what happens when a module or class is renamed;\n- whether unknown types become dictionaries;\n- whether serializer failures are fatal or recoverable.\n\nThe serializer is necessarily involved in converting persisted data back into runtime values, but the supplied material does not provide enough implementation evidence to identify it as the cause of the observed dictionary representation.\n\n## 7. Backward compatibility requirements\n\nThe documented compatibility model means that deploying a new graph version is also a change to the code that processes all existing checkpoints.\n\nCompatibility should therefore be evaluated against:\n\n- the persisted state schema;\n- the names and locations of application-defined types;\n- the expected runtime representation of each state value;\n- the values returned by current nodes;\n- checkpoints created by previous application versions.\n\nThe documentation specifically warns that the latest graph is applied immediately to resumed threads. Existing threads are not automatically protected by the old graph version.\n\n## 8. Recommended strategy\n\nA safe strategy, based on the documented compatibility model, is to treat persisted checkpoints as versioned data rather than assuming they are interchangeable across arbitrary application releases.\n\nRecommended practices are:\n\n1. **Keep persisted state representations stable.** Prefer state values whose serialized form remains compatible across deployments.\n2. **Avoid renaming or relocating custom types without a compatibility plan.**\n3. **Test resumption from real checkpoints created by prior releases.** Test both immediate continuation and later nodes that consume the restored values.\n4. **Introduce explicit state-version handling or migrations** when the application must change its persisted representation. The retrieved context does not document a specific migration API, so the migration mechanism must be designed using supported application facilities.\n5. **Deploy serializer/type changes together with compatibility support** for previously persisted data.\n6. **Use a controlled rollout** if old and new application versions may process the same threads.\n7. **Fail early on invalid semantic state.** If a node requires a particular custom type, validate that requirement near the resume boundary rather than allowing an incompatible value to propagate.\n\n### Bottom line\n\nThe context supports the conclusion that existing checkpoints are deserialized and then processed by the newest graph version, making custom-type changes a backward-compatibility concern. It also supports the explanation that a workflow could resume and later behave incorrectly if deserialization produces a value that is technically usable but semantically different.\n\nHowever, the supplied context does **not** establish that LangGraph’s serializer specifically converts unrecognized custom objects into dictionaries, nor does it provide the serializer’s registration/import behavior. The exact root cause—serializer fallback, a state conversion elsewhere, or application code—cannot be determined from the retrieved material.",
+            "answer_length": 8377,
+            "prompt_tokens": 2720,
+            "completion_tokens": 1668,
+            "total_tokens": 4388,
+            "estimated_cost": 0.0025456,
+            "generation_latency": 40.448581299999205
+        },
+        "overall_metrics": {
+            "total_latency": 40.448606500001915,
+            "total_cost": 0.0034264,
+            "recall_at_k": 0.42857142857142855,
+            "precision_at_k": 0.5,
+            "hit_rate": 1.0,
+            "mrr": 1.0
+        },
+        "judge_evaluation": {
+            "correctness": {
+                "score": 3.0,
+                "justification": "The answer generally addresses the user's question but contains some inaccuracies and lacks clarity on certain points, particularly regarding the serializer's behavior."
+            },
+            "groundedness": {
+                "score": 3.0,
+                "justification": "Most claims are supported by the retrieved context, but some details about the serializer's behavior and deserialization outcomes are not explicitly documented."
+            },
+            "completeness": {
+                "score": 4.0,
+                "justification": "The answer covers nearly all important aspects of the question, but it could provide more clarity on the serializer's role and the implications of type changes."
+            },
+            "hallucination": {
+                "score": 2.0,
+                "justification": "There are several unsupported claims regarding the serializer's behavior and deserialization outcomes that could mislead the reader."
+            },
+            "missing_concepts": [],
+            "unsupported_claims": [
+                "The answer suggests that the serializer's behavior regarding unrecognized types is not documented, but it implies that it could convert them into dictionaries without clear support from the context."
+            ]
+        }
+    }
+]

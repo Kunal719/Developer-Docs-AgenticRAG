@@ -28,12 +28,15 @@ CHUNK_OVERLAP = 200
 
 DENSE_TOP_K = 10
 BM25_TOP_K = 10
-HYBRID_TOP_K = 12
+DOC_HYBRID_TOP_K = 12
+CODE_HYBRID_TOP_K = 16
 RRF_K = 60
+
+MULTI_QUERY_TOP_K = 40
 
 RERANKER_MODEL = "BAAI/bge-reranker-base"
 RERANK_CANDIDATES = 15
-RERANK_TOP_K = 8
+RERANK_TOP_K = 13
 
 MODEL_NAME = "gpt-5.6-luna"
 MODEL_PROVIDER = "openai"
@@ -48,8 +51,8 @@ REBUILD_INDEX = False
 GENERATION_INPUT_PRICE = 0.2
 GENERATION_OUTPUT_PRICE = 1.2
 
-JUDGE_INPUT_PRICE = 0.15
-JUDGE_OUTPUT_PRICE = 0.6
+JUDGE_INPUT_PRICE = 0.3
+JUDGE_OUTPUT_PRICE = 2.5
 
 DOCUMENTATION_SPARSE_PATHS = [
     "src/oss/langgraph",
@@ -59,6 +62,8 @@ IMPLEMENTATION_SPARSE_PATHS = [
     # Graphs
     "libs/langgraph/langgraph/graph/state.py",
     "libs/langgraph/langgraph/graph/message.py",
+    "libs/langgraph/langgraph/graph/_node.py",
+    "libs/langgraph/langgraph/graph/_branch.py",
 
     # Functional API
     "libs/langgraph/langgraph/func/__init__.py",
@@ -66,9 +71,18 @@ IMPLEMENTATION_SPARSE_PATHS = [
     # Pregel
     "libs/langgraph/langgraph/pregel/main.py",
     "libs/langgraph/langgraph/pregel/_checkpoint.py",
+    "libs/langgraph/langgraph/pregel/_loop.py",
+    "libs/langgraph/langgraph/pregel/_algo.py",
+    "libs/langgraph/langgraph/pregel/_read.py",
+    "libs/langgraph/langgraph/pregel/_write.py",
+    "libs/langgraph/langgraph/pregel/_runner.py",
+    "libs/langgraph/langgraph/pregel/_call.py",
+    "libs/langgraph/langgraph/pregel/_executor.py",
+    "libs/langgraph/langgraph/pregel/_retry.py",
 
     # Checkpointing
     "libs/checkpoint/langgraph/checkpoint/base/__init__.py",
+    "libs/checkpoint/langgraph/checkpoint/base/id.py",
     "libs/checkpoint/langgraph/checkpoint/serde/base.py",
     "libs/checkpoint/langgraph/checkpoint/serde/jsonplus.py",
     "libs/checkpoint/langgraph/checkpoint/serde/encrypted.py",
@@ -106,10 +120,16 @@ IMPLEMENTATION_SPARSE_PATHS = [
     "libs/langgraph/langgraph/channels/ephemeral_value.py",
     "libs/langgraph/langgraph/channels/any_value.py",
     "libs/langgraph/langgraph/channels/binop.py",
+    "libs/langgraph/langgraph/channels/delta.py",
 
     # Prebuilt / Agents
     "libs/prebuilt/langgraph/prebuilt/tool_node.py",
     "libs/prebuilt/langgraph/prebuilt/_tool_call_transformer.py",
     "libs/prebuilt/langgraph/prebuilt/_tool_call_stream.py",
     "libs/prebuilt/langgraph/prebuilt/interrupt.py",
+
+    # Internal
+    "libs/langgraph/langgraph/_internal/_config.py",
+    "libs/langgraph/langgraph/_internal/_replay.py"
+
 ]

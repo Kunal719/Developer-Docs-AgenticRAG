@@ -26,7 +26,12 @@ class ResultWriter:
         for result in results:
             result_dict = asdict(result)
 
-            result_dict["judge_evaluation"] = result.judge_evaluation.model_dump()
+            if result.judge_evaluation is not None:
+                result_dict["judge_evaluation"] = (
+                    result.judge_evaluation.model_dump()
+                )
+            else:
+                result_dict["judge_evaluation"] = None
 
             # Convert datetime to ISO string
             result_dict["experiment_metadata"]["timestamp"] = (

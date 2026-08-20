@@ -1,0 +1,726 @@
+[
+    {
+        "question": {
+            "id": 2,
+            "category": "code_review",
+            "intent": "graph_construction",
+            "difficulty": "medium",
+            "question": "Review this graph construction. The developer wants tool execution to occur only when the model requests a tool call. Explain whether the workflow satisfies that requirement and suggest improvements.",
+            "expected_files": [
+                "thinking-in-langgraph.mdx",
+                "application-structure.mdx",
+                "workflows-agents.mdx",
+                "graph-api.mdx",
+                "use-graph-api.mdx"
+            ],
+            "concepts": [
+                "ToolNode",
+                "MessagesState",
+                "conditional edges",
+                "tool execution"
+            ],
+            "tags": [
+                "code-review",
+                "graph-construction",
+                "ToolNode",
+                "conditional-routing",
+                "tool-execution",
+                "MessagesState"
+            ],
+            "code_snippet": "builder = StateGraph(MessagesState)\n\nbuilder.add_node(\"assistant\", assistant)\nbuilder.add_node(\"tools\", ToolNode(tools))\n\nbuilder.add_edge(START, \"assistant\")\nbuilder.add_edge(\"assistant\", \"tools\")\nbuilder.add_edge(\"tools\", END)\n\ngraph = builder.compile()",
+            "observed_behavior": null,
+            "expected_behavior": null,
+            "error": null,
+            "logs": null,
+            "evidence": null,
+            "queries": [
+                "How should LangGraph conditionally route to ToolNode only when the model requests a tool call?",
+                "How do conditional edges determine whether a LangGraph workflow executes tools or ends?",
+                "How does ToolNode work with MessagesState and model tool calls in LangGraph?",
+                "What is the correct LangGraph graph construction for an assistant node that may call tools and otherwise finishes?",
+                "How should LangGraph assistant and ToolNode nodes be connected using conditional edges for tool execution?"
+            ]
+        },
+        "experiment_metadata": {
+            "version": "v5",
+            "timestamp": "2026-08-12T21:09:06.564723",
+            "embedding_model": "text-embedding-3-small",
+            "llm_provider": "openai",
+            "llm": "gpt-5.6-luna",
+            "chunk_size": 1200,
+            "chunk_overlap": 200,
+            "dense_top_k": 10,
+            "bm25_top_k": 10,
+            "hybrid_top_k": 12,
+            "rrf_k": 60,
+            "reranker_top_k": 8,
+            "reranker_name": "BAAI/bge-reranker-base",
+            "judge_model": "gpt-4o-mini",
+            "judge_provider": "openai"
+        },
+        "pipeline_stages": [
+            {
+                "name": "Dense Retriever",
+                "latency": 2.335614399999031,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "d257bf3584e5687e59edcf7b774b5690352fc26f14b2525b013ee2e83724c332",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c7d8f1f4f5f29fb691dfcfa72c1865112da63318efd17f2e11ed294d9d45dcc2",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "770d1df8424c09d4f5c1a2013526cc997f65bc41851b0f1f5fd134a18a5d68e9",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f2ace2e197ae0ac2307e0a0bb145facc1d3c1ba2d6399f30387923f3a85a60a4",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ca666fb49771f39701c72a4f9d497cd7e7f31d976db06ce79f3a6362ad50ac5d",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f169071fd689ce63a2e0227deb4ff10509fa169db9ba2fc27a2181f73c514fd9",
+                        "source": "choosing-apis.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "107a8e420b7ab262161d15cfaf95160636cc567f4a2d2dd8ee16f996047e8310",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "aa9236fbdd01008cb3192f36d041663312fe08c59e2bdc1a5f669a2515906bb5",
+                        "source": "choosing-apis.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "df770d092ef6a78de81677c0c73f63a941f6c6b393d78f0c775952a699fd544a",
+                        "source": "event-streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "cca8a2ced9d523cca2b0e7a4af86344072ba52208eba212d151f8f5d7503bf6a",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.03358949999892502,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "938b572a1d5e21cac829b309101ebab2e5294657bf65f97d2b9ac7776b2e36c9",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "64fb9cf5b463f8d061904721aa4476d19e8c462afa096582a9cf6adda5b38cb0",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a1c94d780143ec5f7044700026dc5dc5d66f397b02ab766527bf659e38b91c76",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "69cf532f6430d6a7e7aeb23e67c558c1ce36cec4cb4f45530aa6ed7f60aa5111",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a7e8dc05f02fbeab49ca0ca3a3c8944ce3c46f0afe42075618b6581ea50732b0",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d257bf3584e5687e59edcf7b774b5690352fc26f14b2525b013ee2e83724c332",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9d20ecdc7415c46e8f97eb9386c3d7dfa12bbf358dbfa225f5a1aa30a0fdfc2a",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "aabbc125dab86221d3ea7aa69bfd81c916cf9b398aec4bb4d239c08ff9b3d42d",
+                        "source": "use-subgraphs.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7326e0c7eda0af70a455fa765fc851f96c05a9f87b618cc17fcdc0d021174229",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8f303f8130ee7e6a11694469de567463e400990856cb4a3ea48510ca82ecbfd6",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.0099999750964344e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "d257bf3584e5687e59edcf7b774b5690352fc26f14b2525b013ee2e83724c332",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.031544957774465976,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "938b572a1d5e21cac829b309101ebab2e5294657bf65f97d2b9ac7776b2e36c9",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "c7d8f1f4f5f29fb691dfcfa72c1865112da63318efd17f2e11ed294d9d45dcc2",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "64fb9cf5b463f8d061904721aa4476d19e8c462afa096582a9cf6adda5b38cb0",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "770d1df8424c09d4f5c1a2013526cc997f65bc41851b0f1f5fd134a18a5d68e9",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "a1c94d780143ec5f7044700026dc5dc5d66f397b02ab766527bf659e38b91c76",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "f2ace2e197ae0ac2307e0a0bb145facc1d3c1ba2d6399f30387923f3a85a60a4",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "69cf532f6430d6a7e7aeb23e67c558c1ce36cec4cb4f45530aa6ed7f60aa5111",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "ca666fb49771f39701c72a4f9d497cd7e7f31d976db06ce79f3a6362ad50ac5d",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "a7e8dc05f02fbeab49ca0ca3a3c8944ce3c46f0afe42075618b6581ea50732b0",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "f169071fd689ce63a2e0227deb4ff10509fa169db9ba2fc27a2181f73c514fd9",
+                        "source": "choosing-apis.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "107a8e420b7ab262161d15cfaf95160636cc567f4a2d2dd8ee16f996047e8310",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 0.5854681999990134,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "c240239a40b3bc7103720ff731131fd2acdb08a82e1999e3494df452c9b40772",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "49cf0069b903cb1ce54dfb6ab3ec2a4528b78e2435c49a1aa5204e1d05997453",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9bd5f011f3c3736f355c7f417d7be8a35bd0c1390baf19af4ed462082d764ba9",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "68b2163cea6b366f7b487ab80dabce417d32e1404d981435568586bef686869b",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "84f1208433be4459eadbe53219c0a9eb1dca927937b9c27d14f12d88cbc0fdab",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "eabf51095c40977f9b3d22a9af4c2b004cc388897b177b269db2c6c82b771b2e",
+                        "source": "langgraph/langgraph/graph/message.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b4508eef682266bef5c7ad6760e28633b89d892fd3d743b947610253fd22a509",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b525538d768953dc431a3d287e998a02e75264bc754698b608b791cf1e67856e",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0cdee37ca79ece99349da1d96983daa39c367483ef049f55213763bf9c5c7a40",
+                        "source": "checkpoint-sqlite/langgraph/checkpoint/sqlite/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0b44b7b4a0e798acfde3c03c862a327777f308564cc3f15aa791e8286428aefd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.027483999998366926,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "c240239a40b3bc7103720ff731131fd2acdb08a82e1999e3494df452c9b40772",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "49cf0069b903cb1ce54dfb6ab3ec2a4528b78e2435c49a1aa5204e1d05997453",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "84f1208433be4459eadbe53219c0a9eb1dca927937b9c27d14f12d88cbc0fdab",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8f4d1d2a59f75d20f9cbd224d3502a6547107a8ab2990e17a32edd170c6e76bd",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0e604cf14d4ce1d3c68b8c94774a85e0196fc6e5fe81806a9d2f7b03fffb505b",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9f6a33df45622e6d09d70168f1b7e3549d26ec901caa1037466dd048f718358a",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "141ed48256c94a1edd3b68f63c4eaa08354238ecc3c936a40bb3a4199afe316e",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ffd51613caaeba21ba390280fa6feaad0bb247267cc187284dc2ccb36b40dd4a",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "e6d734ac849c9538139a1b4d2888add0b69afb119cc3f56a236e264f7760d236",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2a2a9bff07b0d7bbafc2ab06254f2a66a15e45cd229a190d41fc69f7ca2a007f",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 5.080000119050965e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "c240239a40b3bc7103720ff731131fd2acdb08a82e1999e3494df452c9b40772",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03278688524590164,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "49cf0069b903cb1ce54dfb6ab3ec2a4528b78e2435c49a1aa5204e1d05997453",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03225806451612903,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "84f1208433be4459eadbe53219c0a9eb1dca927937b9c27d14f12d88cbc0fdab",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03125763125763126,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "9bd5f011f3c3736f355c7f417d7be8a35bd0c1390baf19af4ed462082d764ba9",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "68b2163cea6b366f7b487ab80dabce417d32e1404d981435568586bef686869b",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "8f4d1d2a59f75d20f9cbd224d3502a6547107a8ab2990e17a32edd170c6e76bd",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "0e604cf14d4ce1d3c68b8c94774a85e0196fc6e5fe81806a9d2f7b03fffb505b",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "eabf51095c40977f9b3d22a9af4c2b004cc388897b177b269db2c6c82b771b2e",
+                        "source": "langgraph/langgraph/graph/message.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "9f6a33df45622e6d09d70168f1b7e3549d26ec901caa1037466dd048f718358a",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "b4508eef682266bef5c7ad6760e28633b89d892fd3d743b947610253fd22a509",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "141ed48256c94a1edd3b68f63c4eaa08354238ecc3c936a40bb3a4199afe316e",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "b525538d768953dc431a3d287e998a02e75264bc754698b608b791cf1e67856e",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 19.46592509999755,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "64fb9cf5b463f8d061904721aa4476d19e8c462afa096582a9cf6adda5b38cb0",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.927784264087677,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "770d1df8424c09d4f5c1a2013526cc997f65bc41851b0f1f5fd134a18a5d68e9",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9048324823379517,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "141ed48256c94a1edd3b68f63c4eaa08354238ecc3c936a40bb3a4199afe316e",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.8948524594306946,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "84f1208433be4459eadbe53219c0a9eb1dca927937b9c27d14f12d88cbc0fdab",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.8942816853523254,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "68b2163cea6b366f7b487ab80dabce417d32e1404d981435568586bef686869b",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.8870113492012024,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "0e604cf14d4ce1d3c68b8c94774a85e0196fc6e5fe81806a9d2f7b03fffb505b",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.8623168468475342,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "eabf51095c40977f9b3d22a9af4c2b004cc388897b177b269db2c6c82b771b2e",
+                        "source": "langgraph/langgraph/graph/message.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.858478307723999,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "938b572a1d5e21cac829b309101ebab2e5294657bf65f97d2b9ac7776b2e36c9",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.8480351567268372,
+                        "rank": 8
+                    }
+                ]
+            }
+        ],
+        "generation_metrics": {
+            "answer": "The graph does **not** satisfy the requirement. The edge\n\n```python\nbuilder.add_edge(\"assistant\", \"tools\")\n```\n\nis unconditional, so the workflow always routes from `assistant` to `tools`, even when the model did not request a tool call.\n\n## Conditional routing\n\nLangGraph’s documented tool-calling pattern is:\n\n1. Run the assistant node.\n2. Inspect the latest message.\n3. Route to `ToolNode` if that message contains tool calls.\n4. Otherwise route to `END`.\n5. After tools execute, usually route back to the assistant so it can use the tool results.\n\nFor example:\n\n```python\nfrom langgraph.graph import END, START, MessagesState, StateGraph\nfrom langgraph.prebuilt import ToolNode, tools_condition\n\nbuilder = StateGraph(MessagesState)\n\nbuilder.add_node(\"assistant\", assistant)\nbuilder.add_node(\"tools\", ToolNode(tools))\n\nbuilder.add_edge(START, \"assistant\")\n\nbuilder.add_conditional_edges(\n    \"assistant\",\n    tools_condition,\n    {\n        \"tools\": \"tools\",\n        \"__end__\": END,\n    },\n)\n\nbuilder.add_edge(\"tools\", \"assistant\")\n\ngraph = builder.compile()\n```\n\n`tools_condition` examines the configured messages field—in this case, `\"messages\"`. According to the implementation, it routes to `\"tools\"` when the last `AIMessage` contains tool calls; otherwise it returns `\"__end__\"`.\n\nThe `ToolNode` is designed to execute the tools represented by the model’s tool calls. It also supports tool execution patterns such as parallel execution, error handling, and state injection.\n\n## Equivalent explicit routing function\n\nThe same routing logic can be written explicitly:\n\n```python\nfrom langgraph.graph import END, START, MessagesState, StateGraph\nfrom langgraph.prebuilt import ToolNode\n\ndef should_continue(state: MessagesState):\n    last_message = state[\"messages\"][-1]\n\n    if last_message.tool_calls:\n        return \"tools\"\n\n    return END\n\nbuilder = StateGraph(MessagesState)\n\nbuilder.add_node(\"assistant\", assistant)\nbuilder.add_node(\"tools\", ToolNode(tools))\n\nbuilder.add_edge(START, \"assistant\")\n\nbuilder.add_conditional_edges(\n    \"assistant\",\n    should_continue,\n    {\n        \"tools\": \"tools\",\n        END: END,\n    },\n)\n\nbuilder.add_edge(\"tools\", \"assistant\")\n\ngraph = builder.compile()\n```\n\nThe conditional function must inspect the assistant’s latest message and test whether it has tool calls. The retrieved implementation describes this as the standard ReAct-style routing behavior.\n\n## Problems with the original graph\n\n```python\nbuilder.add_edge(\"assistant\", \"tools\")\nbuilder.add_edge(\"tools\", END)\n```\n\nThere are two issues:\n\n1. **Tool execution is unconditional.**  \n   The assistant always transitions to `ToolNode`, regardless of whether its message contains tool calls.\n\n2. **The workflow ends immediately after tools.**  \n   If a tool is called, the graph goes from `tools` directly to `END`. An assistant node is not given the opportunity to process the resulting `ToolMessage` and produce a final response.\n\nTherefore, the usual construction is:\n\n```text\nSTART → assistant\n             ├─ tool calls → tools → assistant\n             └─ no tool calls → END\n```\n\nIf the intended behavior is instead to stop immediately after tool execution, the final edge could be:\n\n```python\nbuilder.add_edge(\"tools\", END)\n```\n\nThat would still require the conditional edge from `assistant` to `tools`/`END`; otherwise `ToolNode` remains unconditional.",
+            "answer_length": 3366,
+            "prompt_tokens": 3022,
+            "completion_tokens": 1251,
+            "total_tokens": 4273,
+            "estimated_cost": 0.0021056,
+            "generation_latency": 36.643324500000745
+        },
+        "overall_metrics": {
+            "total_latency": 36.64335510000092,
+            "total_cost": 0.00288005,
+            "recall_at_k": 0.4,
+            "precision_at_k": 0.2,
+            "hit_rate": 1.0,
+            "mrr": 1.0
+        },
+        "judge_evaluation": {
+            "correctness": {
+                "score": 4.0,
+                "justification": "The answer correctly identifies that the original graph does not satisfy the requirement and provides a detailed explanation of the issues with the unconditional routing. However, it could have more explicitly stated the need for conditional edges."
+            },
+            "groundedness": {
+                "score": 5.0,
+                "justification": "All significant claims made in the answer are well supported by the retrieved context, particularly regarding the routing logic and the behavior of the `ToolNode`."
+            },
+            "completeness": {
+                "score": 4.0,
+                "justification": "The answer addresses the main aspects of the user's question and provides a thorough explanation of the workflow issues, but it could include more detail on how to implement the suggested improvements."
+            },
+            "hallucination": {
+                "score": 0.0,
+                "justification": "There are no unsupported or fabricated claims in the answer; all technical details are grounded in the retrieved context."
+            },
+            "missing_concepts": [],
+            "unsupported_claims": []
+        }
+    }
+]

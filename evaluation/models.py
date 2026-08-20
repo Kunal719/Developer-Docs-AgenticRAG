@@ -20,6 +20,8 @@ class BenchmarkQuestion:
     expected_behavior: str | None = None
     error: str | None = None
     logs: str | None = None
+    evidence: list[dict] | None = None
+    queries: list[str] | None = None
 
 @dataclass
 class RetrievedDocument:
@@ -79,6 +81,6 @@ class EvaluationResult:
     question: BenchmarkQuestion
     experiment_metadata: ExperimentMetadata
     pipeline_stages: list[PipelineStage]
-    generation_metrics: GenerationMetrics
     overall_metrics: OverallMetrics
-    judge_evaluation: JudgeEvaluation
+    generation_metrics: GenerationMetrics | None
+    judge_evaluation: JudgeEvaluation | None

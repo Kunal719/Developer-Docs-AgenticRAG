@@ -1,0 +1,1797 @@
+[
+ {
+  "id": 1,
+  "category": "debugging",
+  "intent": "command_routing",
+  "difficulty": "very_hard",
+  "question": "A developer is debugging a LangGraph application where a node uses `Command` to update state and route execution to another node. The state update appears to succeed, but after the graph is resumed from a checkpoint, the workflow follows an unexpected path. Review the implementation and determine whether the problem is caused by `Command` semantics, checkpoint restoration, or graph routing. Explain: 1. How `Command` combines state updates with control flow. 2. How the destination node is determined when `goto` is specified. 3. What happens when a node returns `Command(goto=...)` and that same node also has a statically defined outgoing edge using `add_edge(...)`. 4. Whether `Command(goto=...)` overrides the statically defined edge or whether both routing mechanisms apply. 5. How this explains the observed behavior where `finish` can be reached without executing `execute`. 6. Whether the shown `Command(resume=True)` is actually appropriate for the provided example, given that the code does not show an `interrupt()`. 7. Recommend the correct graph construction.",
+  "code_snippet": "class State(TypedDict):\n    status: str\n    result: str\n\ndef review(state: State):\n    if state[\"status\"] == \"approved\":\n        return Command(\n            update={\"result\": \"approved\"},\n            goto=\"execute\"\n        )\n\n    return Command(\n        update={\"result\": \"rejected\"},\n        goto=\"cancel\"\n    )\n\nbuilder = StateGraph(State)\n\nbuilder.add_node(\"review\", review)\nbuilder.add_node(\"execute\", execute)\nbuilder.add_node(\"cancel\", cancel)\nbuilder.add_node(\"finish\", finish)\n\nbuilder.add_edge(START, \"review\")\nbuilder.add_edge(\"review\", \"finish\")\nbuilder.add_edge(\"execute\", \"finish\")\nbuilder.add_edge(\"cancel\", \"finish\")\n\ngraph = builder.compile(checkpointer=checkpointer)\n\nconfig = {\n    \"configurable\": {\n        \"thread_id\": \"review-123\"\n    }\n}\n\nresult = graph.invoke(\n    {\"status\": \"approved\", \"result\": \"\"},\n    config=config\n)\n\n# Later, after an application restart:\nresult = graph.invoke(\n    Command(resume=True),\n    config=config\n)",
+  "error": null,
+  "observed_behavior": "`review` returns `Command(goto=\"execute\", update=...)`. The state update is persisted correctly. After recovery, the workflow sometimes reaches `finish` without executing `execute`. Removing `builder.add_edge(\"review\", \"finish\")` appears to change the behavior.",
+  "expected_behavior": "`Command(goto=\"execute\")` should dynamically route execution to `execute`, while the `review -> finish` static edge also remains active because `Command` adds dynamic routing rather than overriding static edges. Therefore both `execute` and `finish` can be scheduled from `review`. The graph should use either `Command(goto=...)` or a static edge for routing from `review`, not both. Additionally, `Command(resume=True)` is not appropriate for the shown example because no `interrupt()` is present.",
+  "logs": null,
+  "evidence": [
+    {
+      "id": 1,
+      "title": "Command implementation",
+      "content": "`Command` is documented as a primitive for updating graph state and sending messages to nodes. Its parameters include `update`, `resume`, `goto`, and `graph=None`. `update` applies a state update, `resume` is used to resume execution with a value and is intended to be used together with `interrupt()`, and `goto` specifies a destination node, sequence of nodes, or `Send` object."
+    },
+    {
+      "id": 2,
+      "title": "Command and dynamic/static routing",
+      "content": "The LangGraph Graph API documentation states that `Command` only adds dynamic edges. Static edges defined with `add_edge` still execute. If a node returns `Command(goto=\"my_other_node\")` and the graph also contains `graph.add_edge(\"node_a\", \"node_b\")`, then both `node_b` and `my_other_node` run. The documentation recommends using either `Command` or static edges to route from a node, rather than both."
+    },
+    {
+      "id": 3,
+      "title": "Command update and routing",
+      "content": "The Graph API documentation demonstrates that a node can return `Command(update={\"foo\": \"bar\"}, goto=\"my_other_node\")`, combining a state update with control flow."
+    },
+    {
+      "id": 4,
+      "title": "Resume semantics",
+      "content": "The LangGraph interrupt documentation shows that `Command(resume=...)` is used to resume execution after an `interrupt()`. The value supplied to `resume` becomes the return value of the paused `interrupt()` call. The supplied code contains no `interrupt()`."
+    }
+  ],
+  "expected_files": [
+    "command.mdx",
+    "graph-api.mdx",
+    "use-graph-api.mdx",
+    "persistence.mdx",
+    "checkpoint-sqlite/langgraph/checkpoint/sqlite/aio.py",
+    "langgraph/langgraph/types.py",
+    "langgraph/langgraph/graph/state.py",
+    "prebuilt/langgraph/prebuilt/tool_node.py"
+  ],
+  "concepts": [
+    "Command",
+    "state updates",
+    "control flow",
+    "goto routing",
+    "dynamic edges",
+    "static edges",
+    "graph routing",
+    "checkpoint restoration",
+    "interrupt",
+    "resume"
+  ],
+  "tags": [
+    "command_goto",
+    "dynamic_routing",
+    "static_edge_conflict",
+    "command_resume",
+    "interrupt_resume",
+    "graph_control_flow",
+    "checkpointing"
+  ]
+},
+{
+  "id": 2,
+  "category": "architecture",
+  "intent": "extensibility",
+  "difficulty": "very_hard",
+  "question": "Design a LangGraph application where developers can add new tools, agents, and workflows without modifying the existing graph structure. Explain how you would make the system extensible.",
+  "queries": [
+    "LangGraph application extensibility adding new tools agents and workflows",
+    "LangGraph graph composition and subgraphs for extensible workflows",
+    "LangGraph ToolNode adding and integrating tools",
+    "LangGraph workflows and agents extensible architecture",
+    "LangGraph modular application design and extensibility"
+  ],
+  "code_snippet": null,
+  "error": null,
+  "observed_behavior": null,
+  "expected_behavior": "The application should support adding new tools, agents, and workflows without requiring modifications to the existing graph structure.",
+  "logs": null,
+  "evidence": [],
+  "expected_files": [
+    "workflows-agents.mdx",
+    "graph-api.mdx",
+    "use-subgraphs.mdx",
+    "prebuilt/langgraph/prebuilt/tool_node.py",
+    "local-server.mdx"
+  ],
+  "concepts": [
+    "workflow design",
+    "graph composition",
+    "subgraphs",
+    "ToolNode",
+    "extensibility"
+  ],
+  "tags": [
+    "extensibility",
+    "graph-composition",
+    "subgraphs",
+    "tool-integration",
+    "workflow-design"
+  ]
+},
+{
+  "id": 3,
+  "category": "architecture",
+  "intent": "scalability",
+  "difficulty": "very_hard",
+  "question": "Design a multi-tenant LangGraph platform where each tenant's users have isolated workflow state and long-term memory. Explain how you would use checkpointers, thread_id, and stores to maintain isolation, and describe the considerations for serving many concurrent users.",
+  "queries": [
+    "How should LangGraph checkpointers and thread_id be used to isolate workflow state between tenants and users?",
+    "How can LangGraph stores provide isolated long-term memory for different tenants and users?",
+    "How should multi-tenant LangGraph applications separate persistent execution state and long-term memory?",
+    "What are the LangGraph persistence and checkpointing considerations for serving many concurrent users?",
+    "How should thread_id, checkpointers, and stores be combined in a scalable multi-tenant LangGraph architecture?"
+  ],
+  "expected_files": [
+    "persistence.mdx",
+    "checkpointers.mdx",
+    "stores.mdx",
+    "add-memory.mdx"
+  ],
+  "concepts": [
+    "persistent execution",
+    "checkpointing",
+    "memory",
+    "stores",
+    "state management",
+    "multi-tenancy"
+  ],
+  "tags": [
+    "multi-tenancy",
+    "state-isolation",
+    "thread-isolation",
+    "persistent-memory",
+    "checkpointing",
+    "scalability",
+    "concurrent-users"
+  ]
+},
+{
+  "id": 4,
+  "category": "architecture",
+  "intent": "ai_coding_assistant",
+  "difficulty": "hard",
+  "question": "Design an AI coding assistant capable of planning code changes, executing tools, requesting human approval before modifying code, and recovering from failed tool executions.",
+  "queries": [
+    "How should LangGraph workflows and agents be designed for an AI coding assistant that plans and executes code changes?",
+    "How can ToolNode be used to execute tools in a LangGraph coding assistant?",
+    "How can LangGraph interrupts and human-in-the-loop workflows request approval before executing a code modification?",
+    "How can LangGraph checkpointers and persistence support recovery and resumption after failed tool executions?",
+    "How can LangGraph fault tolerance and durable execution be used to recover from failed tool calls in an agent workflow?",
+    "How do LangGraph workflows combine planning, tool execution, human approval, checkpointing, and fault tolerance?"
+  ],
+  "expected_files": [
+    "workflows-agents.mdx",
+    "interrupts.mdx",
+    "checkpointers.mdx",
+    "fault-tolerance.mdx",
+    "persistence.mdx",
+    "prebuilt/langgraph/prebuilt/tool_node.py",
+    "sql-agent.mdx"
+  ],
+  "concepts": [
+    "agent workflows",
+    "ToolNode",
+    "human-in-the-loop",
+    "checkpointing",
+    "fault tolerance",
+    "workflow design"
+  ],
+  "tags": [
+    "ai-coding-assistant",
+    "agent-workflow",
+    "tool-execution",
+    "human-in-the-loop",
+    "interrupts",
+    "checkpointing",
+    "fault-tolerance",
+    "durable-execution"
+  ]
+},
+{
+  "id": 5,
+  "category": "architecture",
+  "intent": "multi_agent_system",
+  "difficulty": "hard",
+  "question": "Design a multi-agent research system where one agent plans, another retrieves information, a third summarizes findings, and a reviewer validates the final answer. Explain how the agents communicate and coordinate.",
+  "queries": [
+    "How should a LangGraph multi-agent system coordinate separate planning, retrieval, summarization, and review agents?",
+    "How can LangGraph StateGraph be used to design a workflow where multiple agents communicate through shared state?",
+    "How can LangGraph agents communicate and pass information between different workflow stages?",
+    "How can subgraphs be used to compose independent agents into a multi-agent LangGraph workflow?",
+    "How can Command be used for routing and coordination between agents in LangGraph?",
+    "How should a reviewer agent validate or refine the output of other agents in a LangGraph multi-agent system?"
+  ],
+  "expected_files": [
+    "workflows-agents.mdx",
+    "graph-api.mdx",
+    "use-graph-api.mdx",
+    "agentic-rag.mdx",
+    "use-subgraphs.mdx"
+  ],
+  "concepts": [
+    "multi-agent",
+    "agent communication",
+    "workflow design",
+    "StateGraph",
+    "Command",
+    "human-in-the-loop"
+  ],
+  "tags": [
+    "multi-agent",
+    "agent-communication",
+    "workflow-orchestration",
+    "StateGraph",
+    "Command",
+    "subgraphs",
+    "agentic-rag",
+    "reviewer-agent"
+  ]
+},
+{
+  "id": 6,
+  "category": "code_review",
+  "intent": "graph_construction",
+  "difficulty": "medium",
+  "question": "Review this graph construction. The developer wants tool execution to occur only when the model requests a tool call. Explain whether the workflow satisfies that requirement and suggest improvements.",
+  "queries": [
+    "How should LangGraph conditionally route to ToolNode only when the model requests a tool call?",
+    "How do conditional edges determine whether a LangGraph workflow executes tools or ends?",
+    "How does ToolNode work with MessagesState and model tool calls in LangGraph?",
+    "What is the correct LangGraph graph construction for an assistant node that may call tools and otherwise finishes?",
+    "How should LangGraph assistant and ToolNode nodes be connected using conditional edges for tool execution?"
+  ],
+  "code_snippet": "builder = StateGraph(MessagesState)\n\nbuilder.add_node(\"assistant\", assistant)\nbuilder.add_node(\"tools\", ToolNode(tools))\n\nbuilder.add_edge(START, \"assistant\")\nbuilder.add_edge(\"assistant\", \"tools\")\nbuilder.add_edge(\"tools\", END)\n\ngraph = builder.compile()",
+  "expected_files": [
+    "thinking-in-langgraph.mdx",
+    "application-structure.mdx",
+    "workflows-agents.mdx",
+    "graph-api.mdx",
+    "use-graph-api.mdx"
+  ],
+  "concepts": [
+    "ToolNode",
+    "MessagesState",
+    "conditional edges",
+    "tool execution"
+  ],
+  "tags": [
+    "code-review",
+    "graph-construction",
+    "ToolNode",
+    "conditional-routing",
+    "tool-execution",
+    "MessagesState"
+  ]
+},
+{
+  "id": 7,
+  "category": "code_review",
+  "intent": "architecture_review",
+  "difficulty": "hard",
+  "question": "Review the following LangGraph architecture. The developer combined planning, tool execution, summarization, and final response generation into a single node. Evaluate this design from a maintainability, extensibility, and debugging perspective, and recommend improvements.",
+  "queries": [
+    "How should LangGraph applications separate planning, tool execution, summarization, and response generation for maintainability?",
+    "What does LangGraph recommend for structuring workflows and agents instead of putting multiple responsibilities into a single node?",
+    "How can LangGraph graph composition and separate nodes improve extensibility and debugging of agent workflows?",
+    "How should ToolNode be used to separate tool execution from an assistant or planning node in LangGraph?",
+    "What are the application architecture considerations for decomposing a LangGraph workflow into multiple nodes or workflows?",
+    "How do LangGraph workflows and agents support modular design when planning, tool execution, and response generation have different responsibilities?"
+  ],
+  "code_snippet": "def assistant(state: MessagesState):\n    plan = planner.invoke(state)\n    tool_result = execute_tools(plan)\n    summary = summarize(tool_result)\n    final_answer = model.invoke(summary)\n    return {\"messages\": [final_answer]}\n\nbuilder = StateGraph(MessagesState)\nbuilder.add_node(\"assistant\", assistant)\nbuilder.add_edge(START, \"assistant\")\nbuilder.add_edge(\"assistant\", END)\n\ngraph = builder.compile()",
+  "expected_files": [
+    "thinking-in-langgraph.mdx",
+    "application-structure.mdx",
+    "workflows-agents.mdx",
+    "graph-api.mdx",
+    "prebuilt/langgraph/prebuilt/tool_node.py"
+  ],
+  "concepts": [
+    "workflow design",
+    "graph composition",
+    "agent workflows",
+    "ToolNode",
+    "application architecture"
+  ],
+  "tags": [
+    "code-review",
+    "architecture-review",
+    "workflow-design",
+    "graph-composition",
+    "agent-workflows",
+    "ToolNode",
+    "modularity",
+    "maintainability",
+    "debugging",
+    "extensibility"
+  ]
+},
+{
+  "id": 8,
+  "category": "debugging",
+  "intent": "fault_tolerance_recovery",
+  "difficulty": "very_hard",
+  "question": "A LangGraph workflow performs an external side effect through a tool, then crashes before the workflow reaches its next node. After recovery, the workflow may execute the same tool again. Review the architecture and determine how checkpointing, durable execution, retries, and task boundaries should be used to prevent unintended duplicate side effects while still allowing failed work to recover. Explain what LangGraph guarantees and what must be handled at the application level.",
+  "code_snippet": "def process_payment(state):\n    result = payment_api.charge(state[\"amount\"])\n    return {\"payment_result\": result}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"payment\", process_payment)\nbuilder.add_edge(START, \"payment\")\nbuilder.add_edge(\"payment\", END)\n\ngraph = builder.compile(checkpointer=checkpointer)",
+  "error": null,
+  "observed_behavior": "The process sometimes crashes after the external payment succeeds but before the workflow records the result. After recovery, the payment operation may execute again.",
+  "expected_behavior": "Recovery should resume durable workflow execution without unintentionally repeating an external side effect. The design should clearly distinguish LangGraph's execution guarantees from application-level idempotency or side-effect protection.",
+  "logs": null,
+  "queries": [
+    "How does LangGraph durable execution recover a workflow after a failure?",
+    "How should LangGraph tasks and checkpointing be used around side effects to prevent duplicate execution?",
+    "What are the LangGraph fault tolerance and retry considerations for external tool calls?",
+    "How should external side effects be made idempotent in a LangGraph workflow?",
+    "What does LangGraph guarantee about replay and re-execution after checkpoint recovery?"
+  ],
+  "expected_files": [
+    "fault-tolerance.mdx",
+    "persistence.mdx",
+    "checkpointers.mdx",
+    "interrupts.mdx",
+    "langgraph/langgraph/pregel/_checkpoint.py"
+  ],
+  "concepts": [
+    "durable execution",
+    "checkpointing",
+    "fault tolerance",
+    "retries",
+    "side effects",
+    "idempotency",
+    "recovery"
+  ],
+  "tags": [
+    "duplicate-side-effects",
+    "durable-execution",
+    "checkpoint-recovery",
+    "fault-tolerance",
+    "idempotency",
+    "retries"
+  ]
+},
+{
+  "id": 9,
+  "category": "architecture",
+  "intent": "multi_agent_state",
+  "difficulty": "very_hard",
+  "question": "Design a LangGraph system in which several specialized agents are composed into a parent workflow, but each agent should maintain its own internal state while selected information is shared with the parent. Explain how you would use subgraphs, shared state, state schemas, and checkpointing, and identify the architectural consequences of choosing different subgraph state-persistence models.",
+  "code_snippet": "planner = planner_graph.compile()\nresearcher = researcher_graph.compile()\nreviewer = reviewer_graph.compile()\n\nbuilder = StateGraph(ParentState)\nbuilder.add_node(\"planner\", planner)\nbuilder.add_node(\"researcher\", researcher)\nbuilder.add_node(\"reviewer\", reviewer)\n\ngraph = builder.compile(checkpointer=checkpointer)",
+  "error": null,
+  "observed_behavior": "The parent workflow can invoke each specialized graph, but it is unclear which state is shared, which state remains internal to each agent, and how checkpointing affects nested workflows.",
+  "expected_behavior": "The architecture should clearly define state boundaries between parent and child graphs, expose only required shared state, and use an appropriate checkpointing model for the desired persistence behavior.",
+  "logs": null,
+  "queries": [
+    "How does LangGraph compose subgraphs into parent graphs?",
+    "How is state shared between a parent graph and a subgraph in LangGraph?",
+    "What happens when parent and subgraph use different state schemas?",
+    "How does checkpointing behave for subgraphs and nested workflows?",
+    "What are the different LangGraph subgraph persistence and state-passing models?"
+  ],
+  "expected_files": [
+    "use-subgraphs.mdx",
+    "graph-api.mdx",
+    "use-graph-api.mdx",
+    "persistence.mdx",
+    "checkpointers.mdx",
+    "workflows-agents.mdx"
+  ],
+  "concepts": [
+    "subgraphs",
+    "state schemas",
+    "state sharing",
+    "checkpointing",
+    "multi-agent architecture",
+    "parent-child workflows"
+  ],
+  "tags": [
+    "subgraph-state",
+    "state-isolation",
+    "nested-workflows",
+    "checkpointing",
+    "multi-agent",
+    "graph-composition"
+  ]
+},
+{
+  "id": 10,
+  "category": "debugging",
+  "intent": "command_interrupt_resume",
+  "difficulty": "very_hard",
+  "question": "A human-in-the-loop LangGraph workflow uses interrupts for approval and also returns Command objects for state updates and routing. After resuming an interrupted execution, the workflow sometimes follows a different route than expected. Determine how interrupt resumption, Command update, Command goto, checkpoint state, and normal graph edges interact. Identify which parts of the observed behavior are expected and recommend a correct graph design.",
+  "code_snippet": "def approval(state):\n    decision = interrupt(\"Approve change?\")\n    if decision == \"yes\":\n        return Command(\n            update={\"approved\": True},\n            goto=\"execute\"\n        )\n    return Command(\n        update={\"approved\": False},\n        goto=\"cancel\"\n    )\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"approval\", approval)\nbuilder.add_node(\"execute\", execute)\nbuilder.add_node(\"cancel\", cancel)\nbuilder.add_edge(\"approval\", \"finish\")\nbuilder.add_edge(\"execute\", \"finish\")\nbuilder.add_edge(\"cancel\", \"finish\")",
+  "error": null,
+  "observed_behavior": "The interrupt pauses execution correctly, but after Command(resume=...) the workflow may reach a node that was not expected from the Command.goto destination.",
+  "expected_behavior": "Resume should continue the interrupted execution with the supplied resume value, while Command should apply its state update and dynamic routing semantics. Static outgoing edges must be considered when determining the resulting graph execution.",
+  "logs": null,
+  "queries": [
+    "How does LangGraph interrupt and Command resume work together?",
+    "How does Command combine state updates with dynamic routing after an interrupt?",
+    "What happens when Command goto is returned from a node that also has static outgoing edges?",
+    "How does checkpoint persistence restore interrupted LangGraph execution?",
+    "What are the semantics of Command resume, goto, update, and graph routing?"
+  ],
+  "expected_files": [
+    "command.mdx",
+    "graph-api.mdx",
+    "interrupts.mdx",
+    "persistence.mdx",
+    "checkpointers.mdx",
+    "langgraph/langgraph/types.py",
+    "langgraph/langgraph/graph/state.py"
+  ],
+  "concepts": [
+    "Command",
+    "interrupt",
+    "resume",
+    "checkpointing",
+    "dynamic routing",
+    "static edges",
+    "state updates"
+  ],
+  "tags": [
+    "command-resume",
+    "command-goto",
+    "interrupt-resume",
+    "checkpoint-restoration",
+    "dynamic-routing",
+    "static-edge-conflict"
+  ]
+},
+{
+  "id": 11,
+  "category": "architecture",
+  "intent": "agentic_rag",
+  "difficulty": "very_hard",
+  "question": "Design a LangGraph research assistant that first decides whether retrieval is necessary, performs retrieval when required, generates an answer, evaluates whether the evidence is sufficient, and either returns the answer or performs another retrieval cycle. Explain how the workflow should represent the retrieval decision, shared research state, looping control flow, and termination conditions.",
+  "code_snippet": null,
+  "error": null,
+  "observed_behavior": "A simple retrieve-then-generate pipeline often retrieves documents even when they are unnecessary and cannot naturally perform another retrieval pass when the evidence is insufficient.",
+  "expected_behavior": "The workflow should dynamically decide whether retrieval is required, maintain research state across iterations, and terminate when the evidence is sufficient or an appropriate stopping condition is reached.",
+  "logs": null,
+  "queries": [
+    "How does LangGraph implement agentic RAG where an agent decides whether to retrieve?",
+    "How can LangGraph workflows loop between retrieval and generation?",
+    "How should shared state represent retrieved documents and intermediate research results in LangGraph?",
+    "How can conditional edges control iterative retrieval and termination?",
+    "What LangGraph workflow and agent patterns support iterative research and validation?"
+  ],
+  "expected_files": [
+    "agentic-rag.mdx",
+    "workflows-agents.mdx",
+    "graph-api.mdx",
+    "use-graph-api.mdx",
+    "thinking-in-langgraph.mdx"
+  ],
+  "concepts": [
+    "agentic RAG",
+    "conditional routing",
+    "loops",
+    "shared state",
+    "retrieval decisions",
+    "termination conditions"
+  ],
+  "tags": [
+    "agentic-rag",
+    "iterative-retrieval",
+    "conditional-routing",
+    "workflow-loops",
+    "research-state",
+    "termination"
+  ]
+},
+{
+  "id": 12,
+  "category": "architecture",
+  "intent": "production_agent_architecture",
+  "difficulty": "very_hard",
+  "question": "Design a production LangGraph agent that may run for hours, pause for human approval, survive process restarts, execute tools, maintain short-term workflow state and long-term memory, and recover from failures. Explain how persistence, checkpoints, interrupts, stores, tool execution, and workflow structure should work together, and distinguish what LangGraph provides from what the application must implement.",
+  "code_snippet": null,
+  "error": null,
+  "observed_behavior": "A prototype works for short executions but loses progress after process restarts and does not clearly separate workflow state, long-term memory, human approval, and tool execution.",
+  "expected_behavior": "The production architecture should survive restarts, resume interrupted work, preserve appropriate workflow state, maintain long-term memory separately, execute tools safely, and make clear which guarantees come from LangGraph versus application-level infrastructure.",
+  "queries": [
+    "How should LangGraph persistence and checkpointers support long-running workflows?",
+    "How do LangGraph interrupts allow long-running workflows to pause and resume for human approval?",
+    "How should LangGraph stores be used for long-term memory separately from checkpointed workflow state?",
+    "How should ToolNode and tool execution fit into a durable LangGraph agent?",
+    "How do fault tolerance and durable execution help LangGraph workflows survive failures and restarts?",
+    "How should these LangGraph primitives be combined into a production architecture for long-running agents?"
+  ],
+  "expected_files": [
+    "persistence.mdx",
+    "checkpointers.mdx",
+    "stores.mdx",
+    "add-memory.mdx",
+    "interrupts.mdx",
+    "fault-tolerance.mdx",
+    "workflows-agents.mdx",
+    "prebuilt/langgraph/prebuilt/tool_node.py"
+  ],
+  "concepts": [
+    "durable execution",
+    "checkpointing",
+    "interrupts",
+    "human-in-the-loop",
+    "long-term memory",
+    "stores",
+    "tool execution",
+    "fault tolerance",
+    "workflow architecture"
+  ],
+  "tags": [
+    "production-agent",
+    "long-running-workflow",
+    "durable-execution",
+    "checkpointing",
+    "interrupts",
+    "long-term-memory",
+    "fault-tolerance",
+    "tool-execution"
+  ]
+},
+{
+  "id": 13,
+  "category": "debugging",
+  "intent": "long_running_tool_recovery",
+  "difficulty": "very_hard",
+  "question": "A production LangGraph workflow executes a long-running external tool that can take several minutes to complete. The workflow uses checkpointing for durable execution. The tool sometimes completes successfully, but the process fails or loses progress before the tool result is durably recorded. After recovery, the same tool operation is executed again, and the external system reports duplicate operations. Review this architecture and determine how LangGraph checkpointing, task boundaries, durable execution, retries, and external side effects interact. Explain whether checkpointing provides exactly-once execution of the external operation, when unfinished work can be executed again, and how the application should be designed to prevent duplicate side effects while still allowing recovery.",
+  "queries": [
+    "How does LangGraph durable execution recover a workflow after a failure during a long-running task?",
+    "How should LangGraph tasks be used around external API calls and side effects so completed work can be recovered safely?",
+    "When can an unfinished LangGraph task be executed again after checkpoint recovery?",
+    "Does LangGraph checkpointing guarantee exactly-once execution of external side effects?",
+    "How should external side effects in LangGraph be made idempotent when tasks can be retried or re-executed?",
+    "What guarantees does LangGraph provide for checkpoint recovery, task replay, and failed task execution?"
+  ],
+  "code_snippet": "def process_order(state):\n    result = external_api.process_order(state[\"order_id\"])\n    return {\"order_result\": result}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"process_order\", process_order)\nbuilder.add_edge(START, \"process_order\")\nbuilder.add_edge(\"process_order\", END)\n\ngraph = builder.compile(checkpointer=checkpointer)\n\nconfig = {\n    \"configurable\": {\n        \"thread_id\": \"order-123\"\n    }\n}\n\nresult = graph.invoke(\n    {\"order_id\": \"order-123\"},\n    config=config\n)",
+  "error": null,
+  "observed_behavior": "The external operation sometimes completes successfully, but after a process failure the workflow resumes and executes the same operation again. The external system records two operations for the same order.",
+  "expected_behavior": "The workflow should recover from failures without unintentionally duplicating external side effects. Completed work should be recoverable, while incomplete work should be safe to retry.",
+  "logs": null,
+  "expected_files": [
+    "fault-tolerance.mdx",
+    "persistence.mdx",
+    "checkpointers.mdx",
+    "use-graph-api.mdx",
+    "workflows-agents.mdx"
+  ],
+  "concepts": [
+    "durable execution",
+    "checkpointing",
+    "tasks",
+    "fault tolerance",
+    "retries",
+    "external side effects",
+    "idempotency",
+    "exactly-once execution",
+    "recovery"
+  ],
+  "tags": [
+    "long_running_tool",
+    "duplicate_execution",
+    "checkpoint_recovery",
+    "durable_execution",
+    "side_effects",
+    "idempotency",
+    "retry_safety"
+  ]
+},
+{
+  "id": 14,
+  "category": "debugging",
+  "intent": "multiple_interrupts_resume",
+  "difficulty": "very_hard",
+  "question": "A LangGraph workflow contains multiple human-in-the-loop approval points. During one execution, more than one interrupt can become pending. The application resumes the workflow by passing a single Command(resume=...) value and sometimes observes that the workflow resumes at an unexpected approval point or raises an error. Review the implementation and explain how multiple pending interrupts are represented, how resume values are associated with interrupts, what checkpoint persistence has to do with the pending state, and how the application should correctly resume a workflow with multiple pending approvals.",
+  "queries": [
+    "How does LangGraph represent multiple pending interrupts in a single execution?",
+    "How are Command resume values associated with specific pending LangGraph interrupts?",
+    "How should a LangGraph application resume multiple pending interrupts?",
+    "How does checkpoint persistence preserve pending interrupt state across recovery?",
+    "What happens when Command(resume=...) is used while multiple interrupts are pending?",
+    "What are the LangGraph semantics for interrupt IDs, resume values, and multiple pending interrupts?"
+  ],
+  "code_snippet": "def first_approval(state):\n    decision = interrupt(\"Approve the first operation?\")\n    return {\"first_decision\": decision}\n\n\ndef second_approval(state):\n    decision = interrupt(\"Approve the second operation?\")\n    return {\"second_decision\": decision}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"first_approval\", first_approval)\nbuilder.add_node(\"second_approval\", second_approval)\nbuilder.add_edge(START, \"first_approval\")\nbuilder.add_edge(\"first_approval\", \"second_approval\")\nbuilder.add_edge(\"second_approval\", END)\n\ngraph = builder.compile(checkpointer=checkpointer)\n\nresult = graph.invoke(\n    Command(resume=\"yes\"),\n    config={\"configurable\": {\"thread_id\": \"approval-123\"}}\n)",
+  "error": null,
+  "observed_behavior": "When multiple interrupts are pending, supplying a single resume value does not always resume the intended approval step.",
+  "expected_behavior": "The application should associate resume values with the correct pending interrupts and preserve the correct interrupt state across checkpoint recovery.",
+  "expected_files": [
+    "interrupts.mdx",
+    "command.mdx",
+    "persistence.mdx",
+    "checkpointers.mdx",
+    "langgraph/langgraph/types.py",
+    "langgraph/langgraph/graph/state.py"
+  ],
+  "concepts": [
+    "interrupts",
+    "Command resume",
+    "multiple pending interrupts",
+    "checkpointing",
+    "human-in-the-loop",
+    "resume semantics"
+  ],
+  "tags": [
+    "multiple_interrupts",
+    "resume_mapping",
+    "command_resume",
+    "checkpoint_recovery",
+    "human_in_the_loop",
+    "interrupt_state"
+  ]
+},
+  {
+  "id": 15,
+  "category": "debugging",
+  "intent": "checkpoint_deserialization",
+  "difficulty": "very_hard",
+  "question": "A LangGraph application uses persistent checkpoints and is deployed across application versions. After a deployment, an existing workflow resumes successfully from a checkpoint, but some state values that were previously custom Python objects are now represented as plain dictionaries. The workflow does not immediately fail, but later behavior becomes incorrect because code expects the original object type. Review the persistence, checkpointing, backward-compatibility, and serializer implementation and determine whether this behavior is caused by checkpoint restoration, serializer compatibility, or graph execution. Explain: 1. How LangGraph serializes state into checkpoints and restores it during execution. 2. What happens when checkpoint data contains a type that the current runtime cannot deserialize or no longer recognizes. 3. Whether deserialization necessarily fails with an exception or can produce a fallback representation such as a dictionary. 4. How changes to application-defined/custom types across deployments can affect previously persisted checkpoints. 5. Why a workflow can resume successfully while still having semantically corrupted or incomplete state. 6. What role the checkpoint serializer and its type-registration/import mechanisms play in this behavior. 7. How backward compatibility should be considered when deploying a new application version against existing checkpoints. 8. Recommend a safe design or deployment strategy for handling persisted state whose Python types may change between versions.\n\nTo improve retrieval, investigate the question through these related search queries as well:\n- How does LangGraph serialize and deserialize checkpoint state?\n- How does JsonPlusSerializer handle unknown or unavailable Python types during checkpoint deserialization?\n- What happens when a custom Python type cannot be imported or reconstructed from persisted checkpoint data?\n- How does LangGraph handle backward compatibility for previously persisted checkpoints after an application deployment?\n- How do checkpoint serializer type registration and import mechanisms affect restoration of custom state objects?\n- Can LangGraph checkpoint deserialization fall back to a dictionary when the original type is unavailable?\n- How can incompatible custom state types cause a workflow to resume with corrupted or incomplete state?",
+  "expected_files": [
+    "persistence.mdx",
+    "checkpointers.mdx",
+    "backward-compatibility.mdx",
+    "checkpoint/langgraph/checkpoint/serde/base.py",
+    "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+    "checkpoint/langgraph/checkpoint/serde/encrypted.py",
+    "langgraph/langgraph/pregel/_checkpoint.py"
+  ],
+  "concepts": [
+    "checkpoint persistence",
+    "checkpoint serialization",
+    "deserialization",
+    "JsonPlusSerializer",
+    "custom types",
+    "type compatibility",
+    "backward compatibility",
+    "checkpoint restoration",
+    "state corruption",
+    "deployment compatibility"
+  ],
+  "tags": [
+    "checkpoint_deserialization",
+    "serializer_compatibility",
+    "custom_types",
+    "backward_compatibility",
+    "persisted_state",
+    "checkpoint_restore",
+    "jsonplus",
+    "deployment"
+  ],
+  "queries": [
+    "How does LangGraph serialize and deserialize checkpoint state?",
+    "How does JsonPlusSerializer handle unknown or unavailable Python types during checkpoint deserialization?",
+    "What happens when a custom Python type cannot be imported or reconstructed from persisted checkpoint data?",
+    "How does LangGraph handle backward compatibility for previously persisted checkpoints after an application deployment?",
+    "How do checkpoint serializer type registration and import mechanisms affect restoration of custom state objects?",
+    "Can LangGraph checkpoint deserialization fall back to a dictionary when the original type is unavailable?",
+    "How can incompatible custom state types cause a workflow to resume with corrupted or incomplete state?"
+  ]
+},
+{
+    "id": 16,
+    "category": "debugging",
+    "intent": "parallel_subgraph_state_collision",
+    "difficulty": "very_hard",
+    "question": "A LangGraph workflow executes a subgraph and a normal parent-graph node in parallel after the same upstream node. The subgraph writes one state key while the parent node writes a different state key, yet execution fails with InvalidUpdateError saying that another state key can receive only one value per step. Review the implementation and explain how LangGraph applies writes from parallel tasks, how channels determine whether multiple values are allowed, why a subgraph can participate in a concurrent update even when it does not directly modify the reported key, and under what conditions an Annotated reducer is actually required. Distinguish the logical state keys written by individual nodes from the channel-level writes accumulated by the Pregel execution step. Then provide the corrected code for this example and explain why the change resolves the error, including why adding a reducer to the conflicting key is or is not the appropriate fix.",
+    "queries": [
+      "How does LangGraph apply writes from parallel nodes and subgraphs?",
+      "Why can a parallel subgraph cause INVALID_CONCURRENT_GRAPH_UPDATE for a state key it does not explicitly modify?",
+      "How do LangGraph channels determine whether multiple values can be written in one step?",
+      "How does LastValue behave when multiple tasks write during the same Pregel step?",
+      "When does LangGraph require an Annotated reducer for concurrent state updates?",
+      "How are pending writes from parallel tasks collected and applied to graph channels?",
+      "How should a LangGraph subgraph state schema be defined to avoid propagating unrelated parent state keys?",
+      "What is the correct code fix for a concurrent update caused by a subgraph sharing the parent state schema?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\n\nclass State(TypedDict):\n    a: str\n    b: str\n\ndef parent_node(state):\n    return {\"b\": \"parent-result\"}\n\ndef subgraph_node(state):\n    return {\"a\": \"subgraph-result\"}\n\nchild = StateGraph(State)\nchild.add_node(\"child\", subgraph_node)\nchild.add_edge(START, \"child\")\nchild.add_edge(\"child\", END)\nsubgraph = child.compile()\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"parent\", parent_node)\nbuilder.add_node(\"subgraph\", subgraph)\nbuilder.add_edge(START, \"parent\")\nbuilder.add_edge(START, \"subgraph\")\nbuilder.add_edge(\"parent\", END)\nbuilder.add_edge(\"subgraph\", END)\n\ngraph = builder.compile()\ngraph.invoke({\"a\": \"\", \"b\": \"\"})",
+    "error": "langgraph.errors.InvalidUpdateError: At key 'b': Can receive only one value per step. Use an Annotated key to handle multiple values.",
+    "observed_behavior": "A state update can fail with a concurrent-update error even though the application believes the parallel tasks are updating independent keys.",
+    "expected_behavior": "The application should understand which channel receives the conflicting writes, why the Pregel step considers them concurrent, and define an appropriate reducer only when the state semantics genuinely allow multiple values. For this example, the corrected implementation should isolate the subgraph's state schema so that it does not propagate the unrelated parent state key b as part of the subgraph's state update. The answer should provide corrected code and explain why a reducer on b is not the appropriate fix when the conflicting write is unintended.",
+    "expected_files": [
+      "errors/INVALID_CONCURRENT_GRAPH_UPDATE.mdx",
+      "graph-api.mdx",
+      "pregel.mdx",
+      "persistence.mdx",
+      "checkpointers.mdx",
+      "langgraph/langgraph/channels/base.py",
+      "langgraph/langgraph/channels/last_value.py",
+      "langgraph/langgraph/channels/binop.py",
+      "langgraph/langgraph/pregel/main.py",
+      "langgraph/langgraph/pregel/_algo.py",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/graph/state.py"
+    ],
+    "concepts": [
+      "Pregel execution",
+      "parallel writes",
+      "channels",
+      "LastValue",
+      "reducers",
+      "Annotated state",
+      "subgraphs",
+      "concurrent graph updates",
+      "subgraph state schemas",
+      "state propagation"
+    ],
+    "tags": [
+      "parallel_execution",
+      "subgraph_state",
+      "invalid_concurrent_graph_update",
+      "last_value",
+      "reducers",
+      "pregel_writes",
+      "state_schema",
+      "state_propagation",
+      "debugging"
+    ]
+  },
+  {
+    "id": 17,
+    "category": "debugging",
+    "intent": "subgraph_interrupt_resume_checkpoint",
+    "difficulty": "very_hard",
+    "question": "A parent LangGraph invokes a compiled subgraph as a node. The subgraph executes several steps and then pauses at an interrupt. After the application resumes the parent graph with Command(resume=...), the parent node is invoked again and the subgraph unexpectedly starts from its entry point instead of continuing from the internal interrupted node. The checkpointer contains state showing that the subgraph had already progressed to the human-interaction node. Review the implementation and explain how checkpoint namespaces distinguish parent and subgraph execution, how subgraph state is represented in checkpoint snapshots, why invoking a subgraph during parent-node re-execution can cause it to be treated as a fresh execution, and what configuration/checkpoint information is required for the interrupted subgraph to resume from its own checkpoint rather than replaying from the beginning.",
+    "queries": [
+      "How does LangGraph checkpoint state for a subgraph differ from the parent graph?",
+      "How are checkpoint namespaces used for nested LangGraph subgraphs?",
+      "Why can an interrupted subgraph restart from its entry point when the parent node is re-executed?",
+      "How does LangGraph locate the checkpoint belonging to a subgraph during resume?",
+      "What checkpoint information allows a subgraph to resume from its internal interrupt?",
+      "How does parent graph re-execution interact with persisted subgraph state?"
+    ],
+    "code_snippet": "from langgraph.graph import StateGraph, START, END\nfrom langgraph.types import interrupt, Command\n\n\ndef prepare(state):\n    print(\"prepare executed\")\n    return {\"prepared\": True}\n\n\ndef human_node(state):\n    answer = interrupt(\"Approve this operation?\")\n    return {\"answer\": answer}\n\nchild_builder = StateGraph(dict)\nchild_builder.add_node(\"prepare\", prepare)\nchild_builder.add_node(\"human_node\", human_node)\nchild_builder.add_edge(START, \"prepare\")\nchild_builder.add_edge(\"prepare\", \"human_node\")\nchild_builder.add_edge(\"human_node\", END)\nchild = child_builder.compile()\n\n\ndef parent_node(state):\n    return child.invoke(state)\n\nbuilder = StateGraph(dict)\nbuilder.add_node(\"parent_node\", parent_node)\nbuilder.add_edge(START, \"parent_node\")\nbuilder.add_edge(\"parent_node\", END)\ngraph = builder.compile(checkpointer=checkpointer)\n\nconfig = {\"configurable\": {\"thread_id\": \"approval-1\"}}\ngraph.invoke({}, config)\ngraph.invoke(Command(resume=\"approved\"), config)",
+    "error": null,
+    "observed_behavior": "The subgraph's pre-interrupt node executes again after resume even though the subgraph previously reached and persisted its internal interrupt.",
+    "expected_behavior": "On resume, LangGraph should restore the appropriate subgraph checkpoint and continue from the interrupted location rather than treating the subgraph invocation as a new execution.",
+    "expected_files": [
+      "interrupts.mdx",
+      "persistence.mdx",
+      "checkpointers.mdx",
+      "use-subgraphs.mdx",
+      "langgraph/langgraph/pregel/_checkpoint.py",
+      "langgraph/langgraph/pregel/main.py",
+      "langgraph/langgraph/types.py",
+      "langgraph/langgraph/graph/state.py"
+    ],
+    "concepts": [
+      "subgraph checkpoints",
+      "checkpoint namespaces",
+      "interrupt",
+      "Command resume",
+      "nested graphs",
+      "parent re-execution",
+      "checkpoint recovery"
+    ],
+    "tags": [
+      "subgraph_resume",
+      "interrupt_resume",
+      "checkpoint_namespace",
+      "nested_graph",
+      "state_recovery",
+      "reexecution"
+    ]
+  },
+  {
+    "id": 18,
+    "category": "debugging",
+    "intent": "interrupt_replay_state_next",
+    "difficulty": "very_hard",
+    "question": "A node contains two interrupt() calls executed sequentially. The first interrupt is resumed successfully, but after the node reaches the second interrupt, graph.get_state(config).next becomes empty even though the workflow is still waiting for human input. The application uses state.next to decide whether the workflow has completed and therefore incorrectly marks the run as finished. Review the interrupt, task-write, checkpoint, and state-snapshot implementation and explain how resume values are recorded as pending writes, how replay of those writes affects task state, why the second pending interrupt can disappear from the computed next-node list, and what information should actually be used to determine that the graph remains interrupted.",
+    "queries": [
+      "Why can LangGraph get_state().next be empty while an interrupt is still pending?",
+      "How are interrupt resume values represented as task writes?",
+      "How does LangGraph replay RESUME writes when preparing a state snapshot?",
+      "How does an interrupted task affect the next field in a StateSnapshot?",
+      "How should an application determine whether a LangGraph execution is still waiting for an interrupt?",
+      "What is the relationship between pending interrupts, task writes, checkpoints, and StateSnapshot.next?"
+    ],
+    "code_snippet": "from langgraph.graph import StateGraph, START, END\nfrom langgraph.types import interrupt, Command\n\n\ndef approval_node(state):\n    first = interrupt(\"Approve step 1?\")\n    second = interrupt(\"Approve step 2?\")\n    return {\"first\": first, \"second\": second}\n\nbuilder = StateGraph(dict)\nbuilder.add_node(\"approval\", approval_node)\nbuilder.add_edge(START, \"approval\")\nbuilder.add_edge(\"approval\", END)\ngraph = builder.compile(checkpointer=checkpointer)\n\nconfig = {\"configurable\": {\"thread_id\": \"two-step-approval\"}}\ngraph.invoke({}, config)\ngraph.invoke(Command(resume=\"yes\"), config)\n\nsnapshot = graph.get_state(config)\nprint(snapshot.next)",
+    "error": null,
+    "observed_behavior": "After resuming the first interrupt, the state snapshot can report no next nodes even though execution has reached the second interrupt and is still paused.",
+    "expected_behavior": "The application should distinguish an empty next-node list from completion and inspect the persisted interrupt/task state when determining whether execution is awaiting human input.",
+    "expected_files": [
+      "interrupts.mdx",
+      "persistence.mdx",
+      "langgraph/langgraph/types.py",
+      "langgraph/langgraph/pregel/_checkpoint.py",
+      "langgraph/langgraph/pregel/main.py",
+      "langgraph/langgraph/graph/state.py"
+    ],
+    "concepts": [
+      "multiple interrupts in one node",
+      "resume writes",
+      "StateSnapshot",
+      "pending tasks",
+      "checkpoint state",
+      "graph.next",
+      "interrupt detection"
+    ],
+    "tags": [
+      "interrupt_state",
+      "state_snapshot",
+      "pending_writes",
+      "resume_replay",
+      "graph_next",
+      "human_in_the_loop"
+    ]
+  },
+  {
+    "id": 19,
+    "category": "debugging",
+    "intent": "tool_command_state_streaming",
+    "difficulty": "very_hard",
+    "question": "A LangGraph agent uses a ToolNode where a tool returns Command(update=...) to modify graph state instead of returning a normal tool result. The application consumes the graph using stream_mode=\"messages\" and expects to receive the corresponding ToolMessage so that the frontend can render the completed tool call. The state is actually updated correctly, but the ToolMessage is missing from the messages stream. Review ToolNode's command handling and the graph streaming implementation and explain the distinction between state updates produced by a Command and message-stream events, how ToolNode represents command-based tool results, why a state update can succeed without producing the expected messages-stream event, and which stream information the application must consume when it needs both token/message events and state updates.",
+    "queries": [
+      "How does ToolNode handle tools that return Command objects?",
+      "How are Command-based tool state updates represented by ToolNode?",
+      "Why can a ToolMessage be absent from LangGraph messages streaming when a tool returns Command?",
+      "What is the difference between messages streaming and updates streaming in LangGraph?",
+      "How does ToolNode convert tool results into graph state updates?",
+      "How should an application stream both tool messages and Command state updates?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langchain_core.tools import tool\nfrom langgraph.prebuilt import ToolNode\nfrom langgraph.types import Command\nfrom langgraph.graph import StateGraph, START, END\n\nclass State(TypedDict):\n    messages: list\n    user_name: str\n\n@tool\ndef lookup_user() -> Command:\n    return Command(\n        update={\"user_name\": \"Alice\"}\n    )\n\ntool_node = ToolNode([lookup_user])\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"tools\", tool_node)\nbuilder.add_edge(START, \"tools\")\nbuilder.add_edge(\"tools\", END)\ngraph = builder.compile()\n\nfor chunk in graph.stream(\n    {\"messages\": [ai_message_with_tool_call]},\n    stream_mode=\"messages\"\n):\n    print(chunk)",
+    "error": null,
+    "observed_behavior": "The tool's state update is applied, but the application does not observe the expected ToolMessage through the messages stream.",
+    "expected_behavior": "The application should understand which stream mode exposes the state update and tool result and combine stream modes when it needs both message-level events and graph-state updates.",
+    "expected_files": [
+      "event-streaming.mdx",
+      "graph-api.mdx",
+      "langgraph/langgraph/types.py",
+      "langgraph/langgraph/graph/state.py",
+      "prebuilt/langgraph/prebuilt/tool_node.py",
+      "prebuilt/langgraph/prebuilt/_tool_call_transformer.py"
+    ],
+    "concepts": [
+      "ToolNode",
+      "Command",
+      "tool state updates",
+      "ToolMessage",
+      "messages streaming",
+      "updates streaming",
+      "stream modes"
+    ],
+    "tags": [
+      "tool_node",
+      "command_update",
+      "messages_stream",
+      "updates_stream",
+      "tool_message",
+      "streaming"
+    ]
+  },
+  {
+    "id": 20,
+    "category": "debugging",
+    "intent": "checkpoint_update_after_interrupt",
+    "difficulty": "very_hard",
+    "question": "A LangGraph workflow pauses inside a subgraph using interrupt(). While it is paused, the application calls graph.update_state() on the parent thread to modify a state field before the human resumes the workflow. After Command(resume=...) is submitted, the workflow appears to resume from an unexpected state: some values from before the interrupt are preserved, some updated values are present, and the interrupted subgraph may no longer behave as expected. Review the persistence and checkpoint implementation and explain whether update_state() mutates the existing checkpoint or creates a new checkpoint/fork, how reducers are applied to externally supplied updates, how checkpoint_id and thread_id affect which execution state is modified, and why changing state while an interrupt is pending can alter the continuation point or state observed on resume.",
+    "queries": [
+      "How does LangGraph update_state interact with an interrupted graph?",
+      "Does graph.update_state mutate or fork a LangGraph checkpoint?",
+      "How do thread_id and checkpoint_id determine which LangGraph state is updated?",
+      "Are reducers applied when graph.update_state modifies state?",
+      "What happens to pending interrupts when graph state is updated from a checkpoint?",
+      "How can update_state affect a subsequent Command(resume=...) operation?"
+    ],
+    "code_snippet": "from langgraph.graph import StateGraph, START, END\nfrom langgraph.types import interrupt, Command\n\n\ndef approval(state):\n    decision = interrupt(\"Approve deployment?\")\n    return {\"approved\": decision}\n\nbuilder = StateGraph(dict)\nbuilder.add_node(\"approval\", approval)\nbuilder.add_edge(START, \"approval\")\nbuilder.add_edge(\"approval\", END)\ngraph = builder.compile(checkpointer=checkpointer)\n\nconfig = {\"configurable\": {\"thread_id\": \"deploy-42\"}}\n\ngraph.invoke({\"approved\": False, \"environment\": \"staging\"}, config)\n\n# Application edits state while the graph is paused.\nupdated_config = graph.update_state(\n    config,\n    {\"environment\": \"production\"}\n)\n\n# Human resumes using the original execution config.\ngraph.invoke(Command(resume=True), config)",
+    "error": null,
+    "observed_behavior": "After an external state update while an interrupt is pending, the resumed workflow can observe state that differs from the state the application expected to continue from.",
+    "expected_behavior": "The application should understand checkpoint branching, reducer semantics, and the relationship between the updated checkpoint and the pending interrupted execution before modifying state during a pause.",
+    "expected_files": [
+      "persistence.mdx",
+      "checkpointers.mdx",
+      "interrupts.mdx",
+      "langgraph/langgraph/pregel/_checkpoint.py",
+      "langgraph/langgraph/pregel/main.py",
+      "langgraph/langgraph/graph/state.py",
+      "langgraph/langgraph/types.py"
+    ],
+    "concepts": [
+      "update_state",
+      "checkpoint branching",
+      "checkpoint_id",
+      "thread_id",
+      "reducers",
+      "interrupt state",
+      "resume semantics",
+      "state snapshots"
+    ],
+    "tags": [
+      "update_state",
+      "checkpoint_fork",
+      "interrupt_resume",
+      "checkpoint_id",
+      "thread_id",
+      "state_mutation",
+      "reducer_semantics"
+    ]
+  },
+  {
+    "id": 21,
+    "category": "debugging",
+    "intent": "checkpoint_update_after_interrupt",
+    "difficulty": "very_hard",
+    "question": "A LangGraph workflow pauses inside a subgraph using interrupt(). While it is paused, the application calls graph.update_state() on the parent thread to modify a state field before the human resumes the workflow. After Command(resume=...) is submitted, the workflow appears to resume from an unexpected state: some values from before the interrupt are preserved, some updated values are present, and the interrupted subgraph may execute again from an earlier node. Review the persistence, state-update, checkpoint, and Pregel execution implementation and explain precisely whether update_state() mutates the existing checkpoint or creates a new checkpoint/fork, how externally supplied updates are converted into channel writes and passed through reducers, how thread_id, checkpoint_id, and checkpoint namespaces determine the state being modified, and why modifying the parent state while a nested execution is interrupted can cause the subsequent continuation to use a different execution lineage or subgraph checkpoint.",
+    "queries": [
+      "How does LangGraph update_state construct a new checkpoint from an existing state snapshot?",
+      "How are update_state values converted into channel writes and processed by reducers?",
+      "How does LangGraph select a checkpoint using thread_id and checkpoint_id?",
+      "How are parent and subgraph checkpoint namespaces represented during state updates?",
+      "How does updating a parent checkpoint affect pending writes or interrupted subgraph tasks?",
+      "Why can a subgraph restart after its parent graph state is updated while the subgraph is interrupted?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.types import interrupt, Command\nfrom langgraph.checkpoint.memory import InMemorySaver\n\nclass State(TypedDict):\n    environment: str\n    approved: bool\n\ndef approval(state: State):\n    decision = interrupt(\"Approve deployment?\")\n    return {\"approved\": decision}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"approval\", approval)\nbuilder.add_edge(START, \"approval\")\nbuilder.add_edge(\"approval\", END)\n\ngraph = builder.compile(checkpointer=InMemorySaver())\nconfig = {\"configurable\": {\"thread_id\": \"deploy-42\"}}\n\ngraph.invoke({\"environment\": \"staging\", \"approved\": False}, config)\n\nnew_config = graph.update_state(config, {\"environment\": \"production\"})\ngraph.invoke(Command(resume=True), config)",
+    "error": null,
+    "observed_behavior": "After the external state update, the resumed execution can observe a state lineage that differs from the interrupted execution and a nested subgraph may execute again instead of continuing from its previous internal checkpoint.",
+    "expected_behavior": "The system should distinguish the original interrupted checkpoint from the checkpoint produced by update_state and explain which checkpoint and namespace the subsequent resume actually targets.",
+    "expected_files": [
+      "persistence.mdx",
+      "checkpointers.mdx",
+      "interrupts.mdx",
+      "langgraph/langgraph/graph/state.py",
+      "langgraph/langgraph/pregel/_checkpoint.py",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/pregel/_algo.py",
+      "langgraph/langgraph/_internal/_config.py",
+      "checkpoint/langgraph/checkpoint/base/__init__.py",
+      "checkpoint/langgraph/checkpoint/base/id.py"
+    ],
+    "concepts": [
+      "update_state",
+      "checkpoint fork",
+      "checkpoint_id",
+      "thread_id",
+      "checkpoint namespace",
+      "reducers",
+      "pending writes",
+      "interrupt resume",
+      "subgraph execution lineage"
+    ],
+    "tags": [
+      "update_state",
+      "checkpoint_fork",
+      "interrupt_resume",
+      "checkpoint_id",
+      "thread_id",
+      "checkpoint_ns",
+      "reducers",
+      "subgraph"
+    ]
+  },
+  {
+    "id": 22,
+    "category": "debugging",
+    "intent": "subgraph_time_travel_replay_namespace",
+    "difficulty": "very_hard",
+    "question": "A graph contains an expensive subgraph and a human interrupt occurs inside that subgraph. The application obtains a checkpoint corresponding to a node in the middle of the subgraph and performs time travel by invoking the graph with that checkpoint configuration. Instead of continuing from the selected subgraph checkpoint, the entire subgraph executes again from __start__. Explain the complete mechanism that can cause this: how time-travel creates a parent fork checkpoint, how the new parent checkpoint changes the task identity, how subgraph checkpoint namespaces are derived from task IDs, why the incoming checkpoint map can still reference the old namespace, and why ReplayState can therefore fail to find the requested subgraph checkpoint.",
+    "queries": [
+      "How does LangGraph time travel create a fork checkpoint before replay?",
+      "How is a subgraph checkpoint namespace derived from its parent task ID?",
+      "How does PregelLoop determine the checkpoint namespace for nested execution?",
+      "How can a parent checkpoint fork change the task ID used by a subgraph?",
+      "How does ReplayState locate a checkpoint inside a subgraph namespace?",
+      "Why can replay fall back to __start__ when the requested subgraph checkpoint namespace no longer matches?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.types import interrupt\nfrom langgraph.checkpoint.memory import InMemorySaver\n\nclass State(TypedDict):\n    value: int\n    approved: bool\n\ndef first(state):\n    return {\"value\": state[\"value\"] + 1}\n\ndef review(state):\n    interrupt(\"Review\")\n    return {\"approved\": True}\n\nchild = StateGraph(State)\nchild.add_node(\"first\", first)\nchild.add_node(\"review\", review)\nchild.add_edge(START, \"first\")\nchild.add_edge(\"first\", \"review\")\nchild.add_edge(\"review\", END)\nchild_graph = child.compile()\n\nparent = StateGraph(State)\nparent.add_node(\"child\", child_graph)\nparent.add_edge(START, \"child\")\nparent.add_edge(\"child\", END)\ngraph = parent.compile(checkpointer=InMemorySaver())\n\nconfig = {\"configurable\": {\"thread_id\": \"run-1\"}}\ngraph.invoke({\"value\": 0, \"approved\": False}, config)\n\n# Assume checkpoint_config refers to a checkpoint inside the child graph.\ngraph.invoke(None, checkpoint_config)",
+    "error": null,
+    "observed_behavior": "Replay from a subgraph checkpoint can execute earlier subgraph nodes again instead of starting at the selected node.",
+    "expected_behavior": "Replay should resolve the requested checkpoint in the original subgraph namespace and continue from that checkpoint rather than silently entering a new empty namespace.",
+    "expected_files": [
+      "use-time-travel.mdx",
+      "persistence.mdx",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/pregel/_algo.py",
+      "langgraph/langgraph/_internal/_replay.py",
+      "langgraph/langgraph/_internal/_config.py",
+      "langgraph/langgraph/pregel/_checkpoint.py",
+      "langgraph/langgraph/graph/state.py"
+    ],
+    "concepts": [
+      "time travel",
+      "checkpoint fork",
+      "checkpoint namespace",
+      "task_id",
+      "subgraph",
+      "ReplayState",
+      "PregelLoop",
+      "checkpoint map"
+    ],
+    "tags": [
+      "time_travel",
+      "subgraph_replay",
+      "checkpoint_ns",
+      "task_id",
+      "ReplayState",
+      "checkpoint_fork"
+    ]
+  },
+  {
+    "id": 23,
+    "category": "debugging",
+    "intent": "checkpoint_id_resume_becomes_replay",
+    "difficulty": "very_hard",
+    "question": "A workflow contains an interrupt and is persisted with a checkpointer. Resuming using only the thread_id behaves differently from resuming with the same thread_id plus a checkpoint_id obtained from a previous state snapshot. When checkpoint_id is supplied, the workflow appears to replay from the beginning rather than resume at the interrupt. Explain the semantic difference between selecting a checkpoint for time travel/replay and resuming a pending interrupt, how checkpoint configuration is interpreted by PregelLoop, how a checkpoint ID can establish a historical execution point rather than the live pending-interrupt continuation, and why supplying a historical checkpoint together with Command(resume=...) can produce behavior different from using the live thread configuration.",
+    "queries": [
+      "How does checkpoint_id change the execution mode of a LangGraph invocation?",
+      "What is the difference between resuming a pending interrupt and invoking from a historical checkpoint?",
+      "How does PregelLoop detect time-travel execution from checkpoint configuration?",
+      "When does LangGraph fork a checkpoint before replaying from a historical state?",
+      "How does Command(resume=...) interact with a checkpoint selected by checkpoint_id?",
+      "Why can supplying checkpoint_id cause earlier graph nodes to execute again?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.types import interrupt, Command\nfrom langgraph.checkpoint.memory import InMemorySaver\n\nclass State(TypedDict):\n    question: str\n    answer: str\n\ndef ask(state):\n    value = interrupt(\"Provide approval\")\n    return {\"answer\": value}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"ask\", ask)\nbuilder.add_edge(START, \"ask\")\nbuilder.add_edge(\"ask\", END)\ngraph = builder.compile(checkpointer=InMemorySaver())\n\nconfig = {\"configurable\": {\"thread_id\": \"t1\"}}\ngraph.invoke({\"question\": \"deploy?\", \"answer\": \"\"}, config)\n\nstate = graph.get_state(config)\ncheckpoint_id = state.config[\"configurable\"][\"checkpoint_id\"]\n\nhistorical = {\n    \"configurable\": {\n        \"thread_id\": \"t1\",\n        \"checkpoint_id\": checkpoint_id\n    }\n}\n\ngraph.invoke(Command(resume=\"yes\"), historical)",
+    "error": null,
+    "observed_behavior": "The invocation may behave like replay/time travel instead of continuing the live interrupted execution.",
+    "expected_behavior": "The system should clearly distinguish historical checkpoint selection from resuming the current pending interrupt and explain which execution state each configuration targets.",
+    "expected_files": [
+      "persistence.mdx",
+      "use-time-travel.mdx",
+      "interrupts.mdx",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/pregel/_checkpoint.py",
+      "langgraph/langgraph/_internal/_replay.py",
+      "checkpoint/langgraph/checkpoint/base/id.py"
+    ],
+    "concepts": [
+      "checkpoint_id",
+      "thread_id",
+      "resume",
+      "time travel",
+      "checkpoint fork",
+      "historical state",
+      "pending interrupt"
+    ],
+    "tags": [
+      "checkpoint_id",
+      "resume",
+      "time_travel",
+      "replay",
+      "interrupt"
+    ]
+  },
+  {
+    "id": 24,
+    "category": "debugging",
+    "intent": "parallel_interrupt_id_collision",
+    "difficulty": "very_hard",
+    "question": "A ToolNode executes several tools concurrently and each tool calls interrupt(). The graph reports multiple pending interrupts, but the interrupt IDs are identical, so constructing Command(resume={interrupt_id: value}) can only address one tool. Explain how interrupt IDs are derived, which execution namespace participates in the ID generation, why parallel tool executions can share that namespace, why an interrupt counter alone does not necessarily make the generated IDs unique, and how the task-local resume mechanism differs from the namespace-derived interrupt identity.",
+    "queries": [
+      "How are LangGraph interrupt IDs generated from interrupt namespaces?",
+      "Why can parallel ToolNode executions share an interrupt namespace?",
+      "How does Interrupt.from_ns construct an interrupt identifier?",
+      "How does the interrupt counter relate to resume-value matching?",
+      "How does Command(resume={interrupt_id: value}) select a pending interrupt?",
+      "Why can identical interrupt IDs collapse multiple parallel resume values?"
+    ],
+    "code_snippet": "from langgraph.graph import StateGraph, START, END\nfrom langgraph.prebuilt import ToolNode\nfrom langgraph.types import interrupt\nfrom langgraph.checkpoint.memory import InMemorySaver\n\n\ndef approval_tool(name: str):\n    return interrupt({\"tool\": name, \"question\": \"approve?\"})\n\n# Imagine three tool calls are dispatched concurrently and each tool\n# executes the interrupt above.\n# The application later observes three pending interrupts and attempts:\n# Command(resume={interrupt_1: \"yes\", interrupt_2: \"no\", interrupt_3: \"yes\"})",
+    "error": "Multiple parallel interrupts receive the same ID, causing resume-map key collisions.",
+    "observed_behavior": "Multiple concurrent tool executions can produce identical interrupt IDs and therefore cannot be independently addressed through a resume dictionary.",
+    "expected_behavior": "Each independently resumable interrupt should have an unambiguous identity that can be mapped back to the correct pending task.",
+    "expected_files": [
+      "interrupts.mdx",
+      "langgraph/langgraph/types.py",
+      "prebuilt/langgraph/prebuilt/interrupt.py",
+      "prebuilt/langgraph/prebuilt/tool_node.py",
+      "langgraph/langgraph/pregel/_loop.py"
+    ],
+    "concepts": [
+      "interrupt IDs",
+      "checkpoint namespace",
+      "parallel tasks",
+      "ToolNode",
+      "resume map",
+      "interrupt counter",
+      "task-local resume state"
+    ],
+    "tags": [
+      "parallel_interrupts",
+      "interrupt_id",
+      "ToolNode",
+      "resume_map",
+      "checkpoint_ns"
+    ]
+  },
+  {
+    "id": 25,
+    "category": "debugging",
+    "intent": "parallel_tool_interrupt_collection_and_resume",
+    "difficulty": "very_hard",
+    "question": "Three tools are executed in parallel by ToolNode and each tool calls interrupt(). All three tools reach their interrupt, but the checkpoint state contains fewer interrupts than expected and, after resuming with the captured interrupt map, a resume value can be delivered to the wrong tool. Trace how interrupt exceptions are collected from parallel tasks, how pending interrupts are stored in task/checkpoint state, how interrupt namespaces and IDs are associated with individual tasks, and how the resume map is matched back to the task that originally raised each interrupt.",
+    "queries": [
+      "How does ToolNode execute multiple tool calls concurrently?",
+      "Where does LangGraph collect interrupts raised by parallel tasks?",
+      "How are pending interrupts stored in Pregel task state?",
+      "How does LangGraph map a resume value back to the task that raised an interrupt?",
+      "How do interrupt namespaces distinguish parallel tool executions?",
+      "Why could a resume value be delivered to the wrong parallel tool?"
+    ],
+    "code_snippet": "from langgraph.prebuilt import ToolNode\nfrom langgraph.types import interrupt, Command\nfrom langgraph.checkpoint.memory import InMemorySaver\n\n\ndef create_circle():\n    return interrupt({\"tool\": \"circle\", \"question\": \"approve circle?\"})\n\ndef create_square():\n    return interrupt({\"tool\": \"square\", \"question\": \"approve square?\"})\n\ndef create_triangle():\n    return interrupt({\"tool\": \"triangle\", \"question\": \"approve triangle?\"})\n\n# A ToolNode receives three tool calls in the same graph step.\n# All three tools reach interrupt().\n# The application reads graph.get_state(config).tasks and constructs:\n# Command(resume={interrupt_id: response})",
+    "error": null,
+    "observed_behavior": "Only some parallel interrupts may be exposed or a resume value may be associated with the wrong tool.",
+    "expected_behavior": "Every pending interrupt should remain associated with its originating task and resume value.",
+    "expected_files": [
+      "interrupts.mdx",
+      "langgraph/langgraph/types.py",
+      "prebuilt/langgraph/prebuilt/tool_node.py",
+      "prebuilt/langgraph/prebuilt/interrupt.py",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/pregel/_algo.py",
+      "langgraph/langgraph/pregel/_runner.py"
+    ],
+    "concepts": [
+      "ToolNode",
+      "parallel execution",
+      "pending interrupts",
+      "task state",
+      "resume mapping",
+      "interrupt namespace"
+    ],
+    "tags": [
+      "ToolNode",
+      "parallel_interrupts",
+      "pending_interrupts",
+      "resume",
+      "task_mapping"
+    ]
+  },
+  {
+    "id": 26,
+    "category": "debugging",
+    "intent": "multiple_interrupts_same_node_state_snapshot",
+    "difficulty": "very_hard",
+    "question": "A single node calls interrupt() twice. The first invocation pauses at the first interrupt. The application resumes with Command(resume=\"answer-1\"), the node re-executes and reaches the second interrupt, but graph.get_state(config).next unexpectedly becomes empty even though the node is still waiting for the second human response. Explain how LangGraph matches multiple interrupts within the same task, how resume values are associated with interrupt order, how the node is re-executed from its beginning, how pending interrupt state is represented in the checkpoint, and why the state snapshot's next field can differ from the existence of a pending interrupt.",
+    "queries": [
+      "How are multiple interrupt calls inside one LangGraph node matched to resume values?",
+      "Why does a node containing interrupt execute again from the beginning after resume?",
+      "Where are pending interrupts stored in a LangGraph checkpoint task?",
+      "What does StateSnapshot.next represent when a node is interrupted?",
+      "How does LangGraph distinguish a pending interrupt from the next scheduled node?",
+      "Why can get_state().next be empty while an interrupt is still pending?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.types import interrupt, Command\nfrom langgraph.checkpoint.memory import InMemorySaver\n\nclass State(TypedDict):\n    value: str\n\ndef ask_twice(state: State):\n    first = interrupt(\"first question\")\n    second = interrupt(\"second question\")\n    return {\"value\": f\"{first}:{second}\"}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"ask\", ask_twice)\nbuilder.add_edge(START, \"ask\")\nbuilder.add_edge(\"ask\", END)\ngraph = builder.compile(checkpointer=InMemorySaver())\n\nconfig = {\"configurable\": {\"thread_id\": \"1\"}}\ngraph.invoke({\"value\": \"\"}, config)\ngraph.invoke(Command(resume=\"answer-1\"), config)\nstate = graph.get_state(config)\nprint(state.next)",
+    "error": null,
+    "observed_behavior": "After the first resume, the snapshot can report an unexpected empty next tuple while the node has not completed its second interrupt.",
+    "expected_behavior": "The implementation should explain the distinction between scheduled tasks, pending interrupts, and StateSnapshot.next.",
+    "expected_files": [
+      "interrupts.mdx",
+      "langgraph/langgraph/types.py",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/pregel/_checkpoint.py",
+      "checkpoint/langgraph/checkpoint/base/__init__.py"
+    ],
+    "concepts": [
+      "multiple interrupts",
+      "resume ordering",
+      "task-local state",
+      "StateSnapshot.next",
+      "pending interrupts",
+      "node re-execution"
+    ],
+    "tags": [
+      "multiple_interrupts",
+      "StateSnapshot",
+      "resume_order",
+      "pending_interrupt",
+      "node_reexecution"
+    ]
+  },
+  {
+    "id": 27,
+    "category": "debugging",
+    "intent": "nested_subgraph_multiple_interrupt_resume",
+    "difficulty": "very_hard",
+    "question": "A parent graph calls a subgraph as a node. The subgraph contains multiple interrupt() calls across different internal nodes. After the first interrupt is resumed, the parent node re-executes the subgraph. The second interrupt appears, but the resume value intended for the first subgraph task is reused or delivered to the wrong interrupt. Explain how interrupt resume values are scoped to tasks, how subgraph checkpoint namespaces are constructed, why re-entering a subgraph from the parent does not necessarily mean a completely fresh execution, and how the replay/checkpoint machinery determines whether the nested graph resumes from its own checkpoint or creates a new execution lineage.",
+    "queries": [
+      "How are interrupt resume values scoped to a LangGraph task?",
+      "How does a parent node re-enter an interrupted subgraph during resume?",
+      "How are nested subgraph checkpoint namespaces derived from task identity?",
+      "How does LangGraph locate an existing subgraph checkpoint when the parent node executes again?",
+      "Why can a resume value from one interrupt be reused by another interrupt in nested execution?",
+      "What determines whether a nested subgraph resumes or starts from its entry point?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.types import interrupt, Command\nfrom langgraph.checkpoint.memory import InMemorySaver\n\nclass State(TypedDict):\n    value: str\n\ndef human_a(state):\n    return {\"value\": interrupt(\"A?\")}\n\ndef human_b(state):\n    return {\"value\": interrupt(\"B?\")}\n\nchild = StateGraph(State)\nchild.add_node(\"a\", human_a)\nchild.add_node(\"b\", human_b)\nchild.add_edge(START, \"a\")\nchild.add_edge(\"a\", \"b\")\nchild.add_edge(\"b\", END)\nchild_graph = child.compile()\n\nparent = StateGraph(State)\nparent.add_node(\"child\", child_graph)\nparent.add_edge(START, \"child\")\nparent.add_edge(\"child\", END)\ngraph = parent.compile(checkpointer=InMemorySaver())\n\nconfig = {\"configurable\": {\"thread_id\": \"nested-1\"}}\ngraph.invoke({\"value\": \"\"}, config)\ngraph.invoke(Command(resume=\"answer-A\"), config)",
+    "error": null,
+    "observed_behavior": "Nested interrupt/resume behavior can reuse or misassociate resume values when parent and subgraph execution identities change.",
+    "expected_behavior": "Each interrupt should be resolved against the correct task/checkpoint namespace and resume lineage.",
+    "expected_files": [
+      "use-subgraphs.mdx",
+      "interrupts.mdx",
+      "persistence.mdx",
+      "langgraph/langgraph/types.py",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/_internal/_config.py",
+      "langgraph/langgraph/_internal/_replay.py",
+      "langgraph/langgraph/pregel/_checkpoint.py"
+    ],
+    "concepts": [
+      "nested subgraphs",
+      "task identity",
+      "interrupt resume",
+      "checkpoint namespace",
+      "parent re-execution",
+      "checkpoint lineage"
+    ],
+    "tags": [
+      "nested_subgraph",
+      "interrupt_resume",
+      "task_id",
+      "checkpoint_ns",
+      "resume_lineage"
+    ]
+  },
+  {
+    "id": 28,
+    "category": "debugging",
+    "intent": "parallel_subgraph_shared_state_channel_update",
+    "difficulty": "very_hard",
+    "question": "A parent graph launches a subgraph and another parent node in parallel. The parent node writes state key b while the subgraph only appears to write state key a. Nevertheless LangGraph raises InvalidUpdateError at key b saying that only one value can be received per step. Review the state-schema construction, channel creation, subgraph state mapping, and Pregel write aggregation logic and explain how a subgraph can participate in the parent's state update semantics even when its own node implementation does not explicitly return b, and why a separate child schema can eliminate the conflict.",
+    "queries": [
+      "How does StateGraph convert TypedDict state fields into channels?",
+      "How are child subgraph state schemas mapped into parent graph channels?",
+      "Why can a subgraph expose parent state keys it does not explicitly write?",
+      "How does Pregel aggregate writes from parallel tasks in one superstep?",
+      "Why does LastValue reject multiple writes to the same key in one step?",
+      "How does defining a narrower child state schema prevent an InvalidUpdateError?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\n\nclass ParentState(TypedDict):\n    a: str\n    b: str\n\nclass ChildState(TypedDict):\n    a: str\n\n\ndef child_node(state: ChildState):\n    return {\"a\": \"child\"}\n\ndef parent_b(state: ParentState):\n    return {\"b\": \"parent\"}\n\nchild = StateGraph(ChildState)\nchild.add_node(\"child_node\", child_node)\nchild.add_edge(START, \"child_node\")\nchild.add_edge(\"child_node\", END)\nchild_graph = child.compile()\n\nparent = StateGraph(ParentState)\nparent.add_node(\"child\", child_graph)\nparent.add_node(\"write_b\", parent_b)\nparent.add_edge(START, \"child\")\nparent.add_edge(START, \"write_b\")\nparent.add_edge(\"child\", END)\nparent.add_edge(\"write_b\", END)\ngraph = parent.compile()",
+    "error": "InvalidUpdateError: At key 'b': Can receive only one value per step.",
+    "observed_behavior": "The subgraph can participate in parent-state channel semantics even though its implementation only returns a value for a.",
+    "expected_behavior": "The child graph should expose only its intended state interface so unrelated parent channels do not receive conflicting writes.",
+    "expected_files": [
+      "errors/INVALID_CONCURRENT_GRAPH_UPDATE.mdx",
+      "use-subgraphs.mdx",
+      "graph-api.mdx",
+      "langgraph/langgraph/graph/state.py",
+      "langgraph/langgraph/channels/base.py",
+      "langgraph/langgraph/channels/last_value.py",
+      "langgraph/langgraph/pregel/_algo.py",
+      "langgraph/langgraph/pregel/_loop.py"
+    ],
+    "concepts": [
+      "state schema",
+      "subgraph interface",
+      "channels",
+      "LastValue",
+      "parallel execution",
+      "superstep",
+      "InvalidUpdateError"
+    ],
+    "tags": [
+      "subgraph_state",
+      "parallel_update",
+      "InvalidUpdateError",
+      "state_schema",
+      "channels"
+    ]
+  },
+  {
+    "id": 29,
+    "category": "debugging",
+    "intent": "subgraph_reducer_out_of_turn_update",
+    "difficulty": "very_hard",
+    "question": "A parent graph uses an Annotated reducer for a counter. A nested subgraph updates the same logical state across several internal steps. The reducer appears to receive values at times the application did not expect, including updates after a node returned an empty dictionary, and the final value is larger than expected. Explain when LangGraph applies channel reducers relative to Pregel supersteps, how writes are buffered and consumed, how subgraph output is propagated to the parent graph, and why an empty node return does not necessarily mean that no channel update will be processed during that step.",
+    "queries": [
+      "When are LangGraph reducers applied relative to Pregel supersteps?",
+      "How are channel writes buffered before reducers are applied?",
+      "How does a subgraph propagate channel updates to its parent graph?",
+      "Can an empty node return still result in channel updates from other pending writes?",
+      "How does BinOpChannel apply accumulated writes in one step?",
+      "How does Pregel prepare and consume writes between supersteps?"
+    ],
+    "code_snippet": "import operator\nfrom typing import Annotated, TypedDict\nfrom langgraph.graph import StateGraph, START, END\n\nclass State(TypedDict):\n    count: Annotated[int, operator.add]\n\ndef increment(state):\n    return {\"count\": 1}\n\ndef empty(state):\n    return {}\n\nchild = StateGraph(State)\nchild.add_node(\"increment\", increment)\nchild.add_node(\"empty\", empty)\nchild.add_edge(START, \"increment\")\nchild.add_edge(\"increment\", \"empty\")\nchild.add_edge(\"empty\", END)\nchild_graph = child.compile()\n\nparent = StateGraph(State)\nparent.add_node(\"child\", child_graph)\nparent.add_edge(START, \"child\")\nparent.add_edge(\"child\", END)\ngraph = parent.compile()\n\nprint(graph.invoke({\"count\": 0}))",
+    "error": null,
+    "observed_behavior": "The reducer can be invoked with accumulated channel writes at superstep boundaries even when one node itself returns {}.",
+    "expected_behavior": "The explanation should distinguish node return values from the complete set of writes applied to a channel during a Pregel step.",
+    "expected_files": [
+      "graph-api.mdx",
+      "use-subgraphs.mdx",
+      "langgraph/langgraph/channels/binop.py",
+      "langgraph/langgraph/channels/base.py",
+      "langgraph/langgraph/channels/delta.py",
+      "langgraph/langgraph/pregel/_algo.py",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/graph/state.py"
+    ],
+    "concepts": [
+      "reducers",
+      "BinOpChannel",
+      "supersteps",
+      "pending writes",
+      "subgraph output",
+      "channel updates"
+    ],
+    "tags": [
+      "reducers",
+      "BinOpChannel",
+      "superstep",
+      "subgraph",
+      "channel_writes"
+    ]
+  },
+  {
+    "id": 30,
+    "category": "debugging",
+    "intent": "send_checkpoint_serialization",
+    "difficulty": "very_hard",
+    "question": "A LangGraph map-reduce workflow uses Send to dynamically route work to several worker nodes. The workflow runs successfully without persistence, but compiling it with a checkpointer causes serialization to fail because a Send object cannot be serialized. Explain why Send can work as an execution packet while still causing checkpoint serialization to fail, whether Send is necessarily part of persisted graph state or instead can appear in checkpoint writes/task data, how JsonPlusSerializer determines whether an object is serializable, and why changing the checkpointer does not necessarily solve the problem if the same serializer boundary is reached.",
+    "queries": [
+      "How does LangGraph Send represent dynamic routing work?",
+      "Where can Send objects appear in Pregel execution or checkpoint writes?",
+      "How does JsonPlusSerializer choose handlers for Python objects?",
+      "Why can Send execute successfully but fail when a checkpoint is serialized?",
+      "What is the difference between execution-time Send packets and persisted checkpoint state?",
+      "How do checkpoint serializers affect MemorySaver and database checkpointers?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.types import Send\nfrom langgraph.checkpoint.memory import InMemorySaver\n\nclass State(TypedDict):\n    results: list[str]\n\ndef router(state: State):\n    return [Send(\"worker\", {\"task\": \"a\"}), Send(\"worker\", {\"task\": \"b\"})]\n\ndef worker(state):\n    return {\"results\": [state[\"task\"]]}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"router\", router)\nbuilder.add_node(\"worker\", worker)\nbuilder.add_edge(START, \"router\")\nbuilder.add_edge(\"worker\", END)\n\ngraph = builder.compile(checkpointer=InMemorySaver())\ngraph.invoke({\"results\": []}, {\"configurable\": {\"thread_id\": \"send-1\"}})",
+    "error": "TypeError: Type is not msgpack serializable: Send",
+    "observed_behavior": "Dynamic routing works until checkpoint persistence forces execution/checkpoint data through the serializer.",
+    "expected_behavior": "The system should explain the precise serialization boundary and distinguish routing packets from durable state.",
+    "expected_files": [
+      "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+      "checkpoint/langgraph/checkpoint/serde/base.py",
+      "checkpoint/langgraph/checkpoint/base/__init__.py",
+      "langgraph/langgraph/types.py",
+      "langgraph/langgraph/pregel/_checkpoint.py",
+      "langgraph/langgraph/pregel/_algo.py"
+    ],
+    "concepts": [
+      "Send",
+      "serialization",
+      "checkpoint",
+      "JsonPlusSerializer",
+      "pending writes",
+      "dynamic routing",
+      "map reduce"
+    ],
+    "tags": [
+      "Send",
+      "serialization",
+      "JsonPlusSerializer",
+      "checkpoint",
+      "map_reduce"
+    ]
+  },
+  {
+    "id": 31,
+    "category": "debugging",
+    "intent": "send_memory_vs_postgres_checkpoint",
+    "difficulty": "very_hard",
+    "question": "The same Send-based map-reduce graph succeeds with an in-memory checkpointer but fails with PostgresSaver with an error that Send is not JSON serializable. Explain why two checkpointers observing the same logical graph state can behave differently, identify which serialization layer is responsible, distinguish serializer behavior from database storage behavior, and explain why changing the Postgres schema or connection settings would not fix an object that never successfully crosses the serializer boundary.",
+    "queries": [
+      "Why can a Send-based graph work with MemorySaver but fail with PostgresSaver?",
+      "Which serialization path is used before LangGraph checkpoint data reaches Postgres?",
+      "How does PostgresSaver store serialized checkpoint blobs?",
+      "What role does JsonPlusSerializer play in database checkpoint persistence?",
+      "How can the same logical state produce different failures with different checkpointers?",
+      "Does Postgres receive a Python Send object directly or serialized checkpoint data?"
+    ],
+    "code_snippet": "from langgraph.graph import StateGraph, START, END\nfrom langgraph.types import Send\nfrom langgraph.checkpoint.memory import InMemorySaver\nfrom langgraph.checkpoint.postgres import PostgresSaver\n\nclass State(dict):\n    pass\n\ndef router(state):\n    return [Send(\"worker\", {\"task\": \"a\"}), Send(\"worker\", {\"task\": \"b\"})]\n\ndef worker(state):\n    return {\"result\": state[\"task\"]}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"router\", router)\nbuilder.add_node(\"worker\", worker)\nbuilder.add_edge(START, \"router\")\nbuilder.add_edge(\"worker\", END)\n\nmemory_graph = builder.compile(checkpointer=InMemorySaver())\n# postgres_graph = builder.compile(checkpointer=postgres_saver)\n\nmemory_graph.invoke({}, {\"configurable\": {\"thread_id\": \"t1\"}})\n# postgres_graph.invoke({}, {\"configurable\": {\"thread_id\": \"t1\"}})",
+    "error": "Postgres persistence raises a JSON/msgpack serialization error for Send.",
+    "observed_behavior": "Memory persistence and database persistence can differ because their serializer/storage paths differ.",
+    "expected_behavior": "The diagnosis should identify the serializer boundary before PostgreSQL storage and distinguish it from SQL persistence itself.",
+    "expected_files": [
+      "checkpoint-postgres/langgraph/checkpoint/postgres/base.py",
+      "checkpoint-postgres/langgraph/checkpoint/postgres/__init__.py",
+      "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+      "checkpoint/langgraph/checkpoint/serde/base.py",
+      "checkpoint/langgraph/checkpoint/base/__init__.py",
+      "langgraph/langgraph/types.py"
+    ],
+    "concepts": [
+      "PostgresSaver",
+      "serialization",
+      "JsonPlusSerializer",
+      "checkpoint blob",
+      "Send",
+      "database persistence"
+    ],
+    "tags": [
+      "PostgresSaver",
+      "Send",
+      "serialization",
+      "JsonPlusSerializer",
+      "checkpoint_storage"
+    ]
+  },
+  {
+    "id": 32,
+    "category": "fault_tolerance",
+    "intent": "pending_writes_durability_recovery",
+    "difficulty": "very_hard",
+    "question": "Two nodes execute in the same Pregel superstep. Node A completes and produces writes, while Node B fails. LangGraph is configured for synchronous durability, yet after a crash or abrupt process termination the system can either replay work or re-execute a previously successful node depending on the persistence ordering. Explain the purpose of pending writes, how put_writes and put_checkpoint interact, what information is persisted for successful tasks in a failed superstep, how the runner determines whether a task's writes can be recovered instead of re-executing the task, and why asynchronous persistence ordering can affect exactly-once-like recovery semantics.",
+    "queries": [
+      "Why does LangGraph persist pending writes when a task fails during a superstep?",
+      "What is the relationship between checkpointer.put_writes and checkpointer.put?",
+      "How are successful sibling task writes recovered after another task fails?",
+      "How does LangGraph determine which completed tasks need to be replayed?",
+      "What does durability='sync' guarantee about checkpoint persistence ordering?",
+      "How can persistence ordering change replay versus re-execution after a crash?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.checkpoint.memory import InMemorySaver\n\nclass State(TypedDict):\n    a: int\n    b: int\n\ndef node_a(state):\n    return {\"a\": state[\"a\"] + 1}\n\ndef node_b(state):\n    raise RuntimeError(\"failure\")\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"a\", node_a)\nbuilder.add_node(\"b\", node_b)\nbuilder.add_edge(START, \"a\")\nbuilder.add_edge(START, \"b\")\nbuilder.add_edge(\"a\", END)\nbuilder.add_edge(\"b\", END)\n\ngraph = builder.compile(checkpointer=InMemorySaver())\ngraph.invoke({\"a\": 0, \"b\": 0}, {\"configurable\": {\"thread_id\": \"fault-1\"}})",
+    "error": "One sibling task fails after another task has completed successfully.",
+    "observed_behavior": "Successful work from a failed superstep may be recovered from pending writes rather than being executed again, depending on what was durably persisted.",
+    "expected_behavior": "The explanation should distinguish checkpoint snapshots from pending task writes and explain how recovery avoids unnecessary re-execution.",
+    "expected_files": [
+      "fault-tolerance.mdx",
+      "persistence.mdx",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/pregel/_runner.py",
+      "langgraph/langgraph/pregel/_executor.py",
+      "langgraph/langgraph/pregel/_retry.py",
+      "langgraph/langgraph/pregel/_checkpoint.py",
+      "checkpoint/langgraph/checkpoint/base/__init__.py"
+    ],
+    "concepts": [
+      "pending writes",
+      "durability",
+      "superstep failure",
+      "recovery",
+      "replay",
+      "re-execution",
+      "checkpointer ordering"
+    ],
+    "tags": [
+      "pending_writes",
+      "durability",
+      "fault_tolerance",
+      "recovery",
+      "replay"
+    ]
+  },
+  {
+    "id": 33,
+    "category": "fault_tolerance",
+    "intent": "parallel_error_handler_retry_semantics",
+    "difficulty": "very_hard",
+    "question": "Two nodes execute concurrently in one superstep. One node raises an exception that is handled by an error handler, while the other node has already completed successfully. The workflow nevertheless propagates the original exception or re-executes work in a way the application did not expect. Explain the interaction between task execution, retry/error handling, runner cancellation, sibling tasks in the same superstep, pending writes, and checkpoint recovery. In particular, determine when a handled exception becomes a successful task result versus when the Pregel step still fails and how that affects other completed tasks.",
+    "queries": [
+      "How does LangGraph execute sibling tasks within the same Pregel superstep?",
+      "When does an error handler convert a node failure into a successful task result?",
+      "How does PregelRunner propagate exceptions from parallel tasks?",
+      "What happens to already completed sibling tasks when another task fails?",
+      "How do retries interact with pending checkpoint writes?",
+      "When does a handled error still cause the enclosing superstep to fail?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\n\nclass State(TypedDict):\n    a: int\n    b: int\n\ndef successful(state):\n    return {\"a\": state[\"a\"] + 1}\n\ndef failing(state):\n    raise ValueError(\"temporary failure\")\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"successful\", successful)\nbuilder.add_node(\"failing\", failing)\nbuilder.add_edge(START, \"successful\")\nbuilder.add_edge(START, \"failing\")\nbuilder.add_edge(\"successful\", END)\nbuilder.add_edge(\"failing\", END)\ngraph = builder.compile()\n\n# Assume an error handler/retry policy is attached to failing.\n# Observe whether successful's work is retained and whether the\n# exception is considered handled by the enclosing Pregel step.",
+    "error": null,
+    "observed_behavior": "Parallel task failure and recovery can affect whether sibling work is retained, retried, or replayed.",
+    "expected_behavior": "The answer should trace task lifecycle, runner error propagation, retry handling, and checkpoint persistence rather than treating the error handler as a simple try/except.",
+    "expected_files": [
+      "fault-tolerance.mdx",
+      "langgraph/langgraph/pregel/_runner.py",
+      "langgraph/langgraph/pregel/_retry.py",
+      "langgraph/langgraph/pregel/_executor.py",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/pregel/main.py",
+      "checkpoint/langgraph/checkpoint/base/__init__.py"
+    ],
+    "concepts": [
+      "parallel tasks",
+      "error handling",
+      "retry",
+      "PregelRunner",
+      "pending writes",
+      "superstep failure"
+    ],
+    "tags": [
+      "retry",
+      "error_handler",
+      "parallel_tasks",
+      "PregelRunner",
+      "pending_writes"
+    ]
+  },
+  {
+    "id": 34,
+    "category": "debugging",
+    "intent": "update_state_reducer_checkpoint_lineage",
+    "difficulty": "very_hard",
+    "question": "A graph uses a reducer such as operator.add for a state field. The application obtains a historical state snapshot and calls update_state() against that snapshot with an externally supplied value. The resulting state is not equal to simply replacing the field with the supplied value; instead the reducer combines the update with the historical value and the resulting execution creates a new checkpoint lineage. Explain why update_state() behaves like a graph update rather than direct mutation, how the selected checkpoint becomes the base state, how reducer logic is applied to externally supplied updates, and how the resulting checkpoint differs from the original historical checkpoint.",
+    "queries": [
+      "How does update_state use a historical checkpoint as the base state?",
+      "Are reducers applied to values supplied through graph.update_state?",
+      "How does LangGraph represent a new checkpoint created from update_state?",
+      "What happens when update_state is called with a checkpoint_id?",
+      "How does update_state differ from directly mutating StateSnapshot.values?",
+      "How does reducer-based state merging affect checkpoint branching?"
+    ],
+    "code_snippet": "import operator\nfrom typing import Annotated, TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.checkpoint.memory import InMemorySaver\n\nclass State(TypedDict):\n    count: Annotated[int, operator.add]\n\ndef increment(state):\n    return {\"count\": 1}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"increment\", increment)\nbuilder.add_edge(START, \"increment\")\nbuilder.add_edge(\"increment\", END)\ngraph = builder.compile(checkpointer=InMemorySaver())\n\nconfig = {\"configurable\": {\"thread_id\": \"counter\"}}\ngraph.invoke({\"count\": 1}, config)\nstate = graph.get_state(config)\n\nhistorical = state.config\nnew_config = graph.update_state(historical, {\"count\": 10})\nprint(graph.get_state(new_config).values)",
+    "error": null,
+    "observed_behavior": "The update is combined according to the channel reducer rather than behaving like a raw assignment.",
+    "expected_behavior": "The answer should explain reducer application, historical checkpoint selection, and creation of a new state lineage.",
+    "expected_files": [
+      "persistence.mdx",
+      "graph-api.mdx",
+      "langgraph/langgraph/graph/state.py",
+      "langgraph/langgraph/channels/binop.py",
+      "langgraph/langgraph/pregel/_checkpoint.py",
+      "langgraph/langgraph/pregel/_algo.py",
+      "checkpoint/langgraph/checkpoint/base/__init__.py"
+    ],
+    "concepts": [
+      "update_state",
+      "reducers",
+      "historical checkpoint",
+      "checkpoint branching",
+      "StateSnapshot",
+      "BinOpChannel"
+    ],
+    "tags": [
+      "update_state",
+      "reducers",
+      "checkpoint_branch",
+      "historical_state",
+      "BinOpChannel"
+    ]
+  },
+  {
+    "id": 35,
+    "category": "debugging",
+    "intent": "nested_subgraph_checkpoint_namespace_inheritance",
+    "difficulty": "very_hard",
+    "question": "A three-level graph hierarchy is used: parent graph → child subgraph → nested subgraph. After a checkpoint is created inside the deepest subgraph, the application resumes or replays the parent graph and discovers that the nested subgraph has inherited an unexpected checkpoint namespace from its parent. Explain how checkpoint namespaces are propagated through nested execution, how configuration patches are applied when a graph is invoked as a subgraph, how the parent task ID participates in namespace construction, and why an incorrect or stale checkpoint namespace can cause the nested graph to resume from the wrong checkpoint or start over.",
+    "queries": [
+      "How does LangGraph propagate checkpoint configuration into nested subgraphs?",
+      "How are checkpoint namespaces constructed for nested graph execution?",
+      "How does a parent task ID affect a child subgraph checkpoint namespace?",
+      "What does patch_checkpoint_map do during nested execution?",
+      "How does LangGraph prevent a child graph from accidentally using the parent's checkpoint namespace?",
+      "Why can stale checkpoint namespace configuration cause nested subgraph replay to restart?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.checkpoint.memory import InMemorySaver\n\nclass State(TypedDict):\n    value: int\n\ndef leaf(state):\n    return {\"value\": state[\"value\"] + 1}\n\nleaf_builder = StateGraph(State)\nleaf_builder.add_node(\"leaf\", leaf)\nleaf_builder.add_edge(START, \"leaf\")\nleaf_builder.add_edge(\"leaf\", END)\nleaf_graph = leaf_builder.compile()\n\nchild_builder = StateGraph(State)\nchild_builder.add_node(\"nested\", leaf_graph)\nchild_builder.add_edge(START, \"nested\")\nchild_builder.add_edge(\"nested\", END)\nchild_graph = child_builder.compile()\n\nparent_builder = StateGraph(State)\nparent_builder.add_node(\"child\", child_graph)\nparent_builder.add_edge(START, \"child\")\nparent_builder.add_edge(\"child\", END)\n\ngraph = parent_builder.compile(checkpointer=InMemorySaver())\nconfig = {\"configurable\": {\"thread_id\": \"nested\"}}\ngraph.invoke({\"value\": 0}, config)",
+    "error": null,
+    "observed_behavior": "Nested executions can inherit or derive checkpoint namespace configuration from the enclosing task hierarchy.",
+    "expected_behavior": "Each nested execution should resolve its checkpoint namespace consistently with its task identity and parent checkpoint map.",
+    "expected_files": [
+      "use-subgraphs.mdx",
+      "persistence.mdx",
+      "langgraph/langgraph/_internal/_config.py",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/pregel/_checkpoint.py",
+      "langgraph/langgraph/pregel/_algo.py",
+      "langgraph/langgraph/graph/state.py"
+    ],
+    "concepts": [
+      "nested subgraphs",
+      "checkpoint namespace",
+      "task_id",
+      "checkpoint map",
+      "configuration propagation",
+      "parent-child execution"
+    ],
+    "tags": [
+      "nested_subgraph",
+      "checkpoint_ns",
+      "checkpoint_map",
+      "task_id",
+      "configuration"
+    ]
+  },
+  {
+    "id": 36,
+    "category": "serialization",
+    "intent": "checkpoint_deserialization_type_reconstruction",
+    "difficulty": "very_hard",
+    "question": "A LangGraph application stores custom Python objects in state. The checkpoint is written successfully, but after process restart the restored value is a plain structure rather than the original custom type, causing application code to fail only after resume. Explain the serialization/deserialization path through JsonPlusSerializer, how type metadata is encoded and reconstructed, when pickle or msgpack fallbacks are involved, how serializer configuration controls which Python types can be reconstructed, and why the failure can appear during resumed execution rather than at the moment the checkpoint was created.",
+    "queries": [
+      "How does JsonPlusSerializer encode Python types in LangGraph checkpoints?",
+      "How does LangGraph reconstruct custom objects during checkpoint deserialization?",
+      "When does JsonPlusSerializer use msgpack versus pickle or other fallbacks?",
+      "How can checkpoint deserialization produce a different runtime type from the original state?",
+      "What does LANGGRAPH_STRICT_MSGPACK change about checkpoint deserialization?",
+      "Why can a serialization compatibility problem surface only after restarting and resuming a graph?"
+    ],
+    "code_snippet": "from dataclasses import dataclass\nfrom typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.checkpoint.memory import InMemorySaver\n\n@dataclass\nclass UserContext:\n    user_id: str\n    role: str\n\nclass State(TypedDict):\n    context: UserContext\n\ndef use_context(state):\n    # Application assumes this is still UserContext.\n    return {\"context\": state[\"context\"]}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"use\", use_context)\nbuilder.add_edge(START, \"use\")\nbuilder.add_edge(\"use\", END)\ngraph = builder.compile(checkpointer=InMemorySaver())\n\nconfig = {\"configurable\": {\"thread_id\": \"types-1\"}}\ngraph.invoke({\"context\": UserContext(\"u1\", \"admin\")}, config)\n# Simulate restart and resume from the persisted checkpoint.",
+    "error": "After restoration, application code observes an unexpected runtime representation for the stored custom object.",
+    "observed_behavior": "The checkpoint can be created successfully but deserialization on a later process can reconstruct a different representation or fail to reconstruct the original type.",
+    "expected_behavior": "The explanation should trace the serializer's type metadata, decoding path, and safety/configuration rules.",
+    "expected_files": [
+      "checkpoint/langgraph/checkpoint/serde/base.py",
+      "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+      "checkpoint/langgraph/checkpoint/serde/encrypted.py",
+      "checkpoint/langgraph/checkpoint/base/__init__.py",
+      "persistence.mdx"
+    ],
+    "concepts": [
+      "checkpoint serialization",
+      "deserialization",
+      "JsonPlusSerializer",
+      "type reconstruction",
+      "msgpack",
+      "pickle fallback",
+      "strict deserialization"
+    ],
+    "tags": [
+      "serialization",
+      "deserialization",
+      "JsonPlusSerializer",
+      "custom_types",
+      "msgpack",
+      "checkpoint"
+    ]
+  },
+  {
+    "id": 37,
+    "category": "debugging",
+    "intent": "send_parallel_reducer_checkpoint_interaction",
+    "difficulty": "very_hard",
+    "question": "A map-reduce graph uses Send to create multiple worker tasks. Each worker returns a value to a state key with an Annotated reducer, and the graph is checkpointed. The reducer produces the correct result in memory, but after an interrupt, replay, or checkpoint restoration the aggregation order or intermediate state appears different. Explain the distinction between Send packets, task-local input, channel writes, reducer application at superstep boundaries, checkpointed channel values, and replayed task execution. Determine which parts of the dynamic routing are durable state and which parts are reconstructed from checkpoint metadata and execution scheduling.",
+    "queries": [
+      "How does Send create independent Pregel tasks with task-local input?",
+      "How are writes from multiple Send-created workers aggregated into a reducer channel?",
+      "At what point is the reduced channel value persisted in a checkpoint?",
+      "Are Send routing packets themselves part of durable graph state?",
+      "How does replay reconstruct Send-created tasks from checkpoint state?",
+      "Why can task execution order differ from reducer aggregation order after replay?"
+    ],
+    "code_snippet": "import operator\nfrom typing import Annotated, TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.types import Send\nfrom langgraph.checkpoint.memory import InMemorySaver\n\nclass State(TypedDict):\n    results: Annotated[list[str], operator.add]\n\ndef route(state):\n    return [\n        Send(\"worker\", {\"item\": \"A\"}),\n        Send(\"worker\", {\"item\": \"B\"}),\n        Send(\"worker\", {\"item\": \"C\"}),\n    ]\n\ndef worker(state):\n    return {\"results\": [state[\"item\"]]}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"route\", route)\nbuilder.add_node(\"worker\", worker)\nbuilder.add_edge(START, \"route\")\nbuilder.add_edge(\"worker\", END)\ngraph = builder.compile(checkpointer=InMemorySaver())\n\nconfig = {\"configurable\": {\"thread_id\": \"map-1\"}}\ngraph.invoke({\"results\": []}, config)\n# Replay from a checkpoint and compare the resulting reducer state.",
+    "error": null,
+    "observed_behavior": "The graph can reconstruct worker execution from checkpoint/task information rather than persisting Send objects as ordinary state values.",
+    "expected_behavior": "The explanation should distinguish task scheduling, reducer aggregation, and durable checkpoint state.",
+    "expected_files": [
+      "persistence.mdx",
+      "pregel.mdx",
+      "langgraph/langgraph/types.py",
+      "langgraph/langgraph/pregel/_algo.py",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/channels/binop.py",
+      "langgraph/langgraph/pregel/_checkpoint.py"
+    ],
+    "concepts": [
+      "Send",
+      "map reduce",
+      "reducers",
+      "task scheduling",
+      "checkpoint replay",
+      "supersteps",
+      "channel writes"
+    ],
+    "tags": [
+      "Send",
+      "map_reduce",
+      "reducers",
+      "checkpoint_replay",
+      "task_scheduling"
+    ]
+  },
+  {
+    "id": 38,
+    "category": "debugging",
+    "intent": "delta_channel_update_state_checkpoint_metadata",
+    "difficulty": "very_hard",
+    "question": "A graph uses a DeltaChannel-backed state field and the application calls update_state() repeatedly between graph executions. The resulting checkpoints contain metadata and channel values that do not look like simple full-state replacements. Some updates appear to be represented as deltas while later snapshots contain reconstructed values. Explain the purpose of DeltaChannel, how deltas differ from ordinary channel writes, when a delta is converted into a snapshot, how update_state interacts with delta-channel metadata and counters, and how checkpoint restoration reconstructs the state without treating each externally supplied update as an independent complete state.",
+    "queries": [
+      "What is the purpose of DeltaChannel in LangGraph state execution?",
+      "How are DeltaChannel updates represented differently from ordinary LastValue or BinOp writes?",
+      "When does LangGraph snapshot or materialize accumulated channel deltas?",
+      "How does update_state interact with DeltaChannel metadata and counters?",
+      "How does _checkpoint.py persist channel deltas and reconstructed snapshots?",
+      "How are DeltaChannel values restored from a checkpoint?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.checkpoint.memory import InMemorySaver\n\nclass State(TypedDict):\n    value: int\n\ndef node(state):\n    return {\"value\": state[\"value\"] + 1}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"node\", node)\nbuilder.add_edge(START, \"node\")\nbuilder.add_edge(\"node\", END)\ngraph = builder.compile(checkpointer=InMemorySaver())\n\nconfig = {\"configurable\": {\"thread_id\": \"delta-1\"}}\ngraph.invoke({\"value\": 0}, config)\ngraph.update_state(config, {\"value\": 10})\ngraph.update_state(config, {\"value\": 20})\n\nstate = graph.get_state(config)\nprint(state.values)\nprint(state.metadata)",
+    "error": null,
+    "observed_behavior": "Checkpoint metadata and channel reconstruction can contain information representing incremental state changes rather than only complete replacement values.",
+    "expected_behavior": "The explanation should trace DeltaChannel writes, snapshotting, update_state metadata/counters, and checkpoint reconstruction.",
+    "expected_files": [
+      "persistence.mdx",
+      "graph-api.mdx",
+      "langgraph/langgraph/graph/state.py",
+      "langgraph/langgraph/channels/delta.py",
+      "langgraph/langgraph/pregel/_checkpoint.py",
+      "langgraph/langgraph/pregel/_algo.py",
+      "langgraph/langgraph/pregel/_loop.py",
+      "checkpoint/langgraph/checkpoint/base/__init__.py"
+    ],
+    "concepts": [
+      "DeltaChannel",
+      "update_state",
+      "checkpoint metadata",
+      "delta writes",
+      "snapshots",
+      "state reconstruction",
+      "checkpoint restoration"
+    ],
+    "tags": [
+      "DeltaChannel",
+      "update_state",
+      "checkpoint_metadata",
+      "delta",
+      "snapshot",
+      "state_reconstruction"
+    ]
+  },
+  {
+    "id": 39,
+    "category": "debugging",
+    "intent": "nested_command_parent_routing",
+    "difficulty": "very_hard",
+    "question": "A LangGraph application has three levels of nested graphs: a root graph contains child_graph_1, child_graph_1 contains child_graph_2, and child_graph_2 contains a node that returns Command(graph=Command.PARENT, goto='next_node'). The developer expects the command to propagate exactly one level to child_graph_1, where the target node exists, but LangGraph raises ParentCommand or reports that the target cannot be resolved. Review Command routing, parent-graph propagation, subgraph execution context, and Pregel task metadata and explain precisely how Command.PARENT is resolved when graphs are nested multiple levels deep, how the parent graph is identified from the current execution context, how goto targets are validated against the selected graph, and why a command originating several levels below the root can fail even though the target node exists in an ancestor graph.",
+    "queries": [
+      "How does Command.PARENT resolve the parent graph from a nested LangGraph execution?",
+      "How is the target graph selected when Command contains graph=Command.PARENT?",
+      "How does LangGraph propagate a Command returned from a nested subgraph to its parent?",
+      "How are goto node names validated against the graph selected by Command?",
+      "Why can Command.PARENT fail in a three-level nested graph even when the target node exists in an ancestor?",
+      "How do Pregel task metadata and subgraph execution context determine the parent graph for a Command?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.types import Command\n\nclass State(TypedDict):\n    messages: list[str]\n\ndef root_target(state: State):\n    return {\"messages\": state[\"messages\"] + [\"root target\"]}\n\ndef deep_node(state: State):\n    return Command(\n        graph=Command.PARENT,\n        goto=\"root_target\",\n        update={\"messages\": state[\"messages\"] + [\"deep\"]},\n    )\n\n# child_graph_2 contains deep_node.\n# child_graph_1 contains child_graph_2.\n# root_graph contains child_graph_1 and root_target.\n# The command is returned from deep_node during execution of child_graph_2.\n# The application expects Command.PARENT to route to the immediate parent\n# graph and resolve root_target there.",
+    "error": "langgraph.errors.ParentCommand: Command(... graph='child_2|sub_child_2', goto='root_target') cannot be applied to the selected parent graph.",
+    "observed_behavior": "A Command returned several levels down the graph hierarchy can fail to route to the graph the developer expects, even when the destination node exists elsewhere in the hierarchy.",
+    "expected_behavior": "The system should identify exactly which graph Command.PARENT refers to, how parent propagation works across nested execution boundaries, and which graph owns the goto target.",
+    "expected_files": [
+      "graph-api.mdx",
+      "use-subgraphs.mdx",
+      "langgraph/langgraph/types.py",
+      "langgraph/langgraph/graph/state.py",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/pregel/_algo.py",
+      "langgraph/langgraph/_internal/_config.py",
+      "langgraph/langgraph/pregel/_runner.py"
+    ],
+    "concepts": [
+      "Command",
+      "Command.PARENT",
+      "goto",
+      "nested subgraphs",
+      "parent graph",
+      "task metadata",
+      "graph routing",
+      "execution context"
+    ],
+    "tags": [
+      "Command.PARENT",
+      "nested_subgraph",
+      "goto",
+      "parent_routing",
+      "graph_depth",
+      "Command"
+    ]
+  },
+  {
+    "id": 40,
+    "category": "fault_tolerance",
+    "intent": "sync_durability_pending_writes_crash_recovery",
+    "difficulty": "very_hard",
+    "question": "A production LangGraph workflow uses durability='sync' with a database checkpointer. A node performs an external side effect such as sending an email and then returns successfully. The process is forcibly terminated at a carefully chosen point during the same superstep. After restart, the node sometimes executes again and the email is sent twice. The same code and graph can appear exactly-once after a restart on one machine but duplicate the side effect on another machine. Review the Pregel persistence implementation and checkpoint interface and explain how put_writes() and put() are scheduled, what durability='sync' actually guarantees, how pending writes allow completed tasks to be recovered after sibling failures, why checkpoint persistence and pending-write persistence can still race within a superstep, how recovery decides between replaying a completed task's writes and re-executing the task, and why external side effects therefore cannot safely be treated as exactly-once merely because sync durability is enabled.",
+    "queries": [
+      "What does durability='sync' guarantee in LangGraph and what does it not guarantee?",
+      "How are checkpointer.put_writes and checkpointer.put scheduled during a Pregel superstep?",
+      "Why are pending writes persisted separately from the main checkpoint?",
+      "How does crash recovery determine whether a completed task can be replayed from pending writes?",
+      "Under what circumstances can a successfully completed node execute again after process failure?",
+      "Why can persistence ordering affect whether a node's external side effect is duplicated after recovery?"
+    ],
+    "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.checkpoint.sqlite import SqliteSaver\n\nclass State(TypedDict):\n    step: int\n\ndef charge_customer(state: State):\n    # External side effect: payment provider is called here.\n    charge_payment_provider()\n    return {\"step\": state[\"step\"] + 1}\n\ndef next_step(state: State):\n    return {\"step\": state[\"step\"] + 1}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"charge\", charge_customer)\nbuilder.add_node(\"next\", next_step)\nbuilder.add_edge(START, \"charge\")\nbuilder.add_edge(\"charge\", \"next\")\nbuilder.add_edge(\"next\", END)\n\nwith SqliteSaver.from_conn_string(\"checkpoints.db\") as checkpointer:\n    graph = builder.compile(checkpointer=checkpointer)\n    graph.invoke(\n        {\"step\": 0},\n        {\n            \"configurable\": {\"thread_id\": \"payment-42\"},\n            \"durability\": \"sync\",\n        },\n    )\n\n# The process is forcibly terminated after the external payment succeeds\n# but during checkpoint persistence. Restart the application and resume\n# the same thread.",
+    "error": null,
+    "observed_behavior": "After a crash, the same successful node can execute again, causing a duplicated external side effect. The outcome can depend on the timing of checkpoint and pending-write persistence.",
+    "expected_behavior": "The application should understand that durable checkpointing does not provide exactly-once semantics for arbitrary external side effects and should use idempotency or task boundaries appropriate for durable execution.",
+    "expected_files": [
+      "fault-tolerance.mdx",
+      "persistence.mdx",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/pregel/_runner.py",
+      "langgraph/langgraph/pregel/_executor.py",
+      "langgraph/langgraph/pregel/_checkpoint.py",
+      "checkpoint/langgraph/checkpoint/base/__init__.py",
+      "checkpoint-sqlite/langgraph/checkpoint/sqlite/__init__.py"
+    ],
+    "concepts": [
+      "durability='sync'",
+      "pending writes",
+      "checkpoint persistence",
+      "put_writes",
+      "put",
+      "crash recovery",
+      "replay",
+      "task re-execution",
+      "external side effects",
+      "idempotency",
+      "exactly-once semantics"
+    ],
+    "tags": [
+      "durability",
+      "sync",
+      "pending_writes",
+      "crash_recovery",
+      "replay",
+      "side_effects",
+      "idempotency",
+      "exactly_once"
+    ]
+  }
+]

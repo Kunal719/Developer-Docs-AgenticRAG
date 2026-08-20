@@ -8,6 +8,9 @@ from pipeline.prepare_retrieval_resources import prepare_retrieval_resources
 from ingestion.markdown_parser import load_documents, load_selected_documents
 from ingestion.metadata_extractor import extract_metadata
 
+from ingestion.code_chunker import chunk_python_documents
+from ingestion.chunker import chunk_documents
+
 from ingestion.python_loader import load_python_documents, load_selected_python_documents
 from ingestion.code_metadata_extractor import extract_code_metadata
 
@@ -71,7 +74,8 @@ def main() -> None:
             index_path=DOC_INDEX_PATH,
             loader=load_documents,
             selected_loader=load_selected_documents,
-            metadata_extractor=extract_metadata
+            metadata_extractor=extract_metadata,
+            chunker=chunk_documents
         )
         print("Documentation corpus ready\n")
 
@@ -97,7 +101,8 @@ def main() -> None:
             index_path=CODE_INDEX_PATH,
             loader=load_python_documents,
             selected_loader=load_selected_python_documents,
-            metadata_extractor=extract_code_metadata
+            metadata_extractor=extract_code_metadata,
+            chunker=chunk_python_documents
         )
         print("Implementation corpus ready\n")
         

@@ -21,7 +21,7 @@ class RetrievalEvaluator:
 
         for stage in stages:
             # Calculate Recall@K when stage is RRF Fusion
-            if stage.name == "RRF Fusion":
+            if stage.name in ("RRF Fusion", "Multi Query Fusion"):
                 rrf_documents.extend(stage.documents)
 
             elif stage.name == "Reranker":

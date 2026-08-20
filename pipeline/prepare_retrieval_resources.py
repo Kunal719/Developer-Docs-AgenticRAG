@@ -5,7 +5,7 @@ from pipeline.prepare_chunks import prepare_chunks
 from ingestion.bm25_index import build_bm25_index, save_bm25_index, load_bm25_index
 from ingestion.document_index import update_index_metadata, detect_changes, ChangeSet
 from ingestion.vector_store import delete_documents
-from ingestion.chunker import chunk_documents, assign_chunk_id
+from ingestion.chunker import assign_chunk_id
 from langchain_community.retrievers import BM25Retriever
 
 
@@ -22,7 +22,8 @@ def prepare_retrieval_resources(
         index_path: Path,
         loader: Callable[[Path], list[Document]],
         selected_loader: Callable[[set[str], Path], list[Document]],
-        metadata_extractor: Callable[[list[Document], Path], list[Document]]) -> tuple[Chroma, BM25Retriever]:
+        metadata_extractor: Callable[[list[Document], Path], list[Document]], 
+        chunker: Callable[[list[Document]], list[Document]]) -> tuple[Chroma, BM25Retriever]:
     """
     Prepare retrieval resources for the application.
 
@@ -34,9 +35,9 @@ def prepare_retrieval_resources(
         The vector store and BM25 index.
 
     """
-    
+    repository_status = RepositoryStatus.UPDATED
     if repository_status is RepositoryStatus.CLONED:
-        chunks = prepare_chunks(source_path, loader, metadata_extractor)
+        chunks = prepare_chunks(source_path, loader, metadata_extractor, chunker)
 
         # Create bm25 index
         print("\nCreating bm25 index...")
@@ -87,7 +88,7 @@ def prepare_retrieval_resources(
                 print("\nChunking documents and adding them to vector store...")
                 print(f"Documents: {len(documents)}")
 
-                chunks = chunk_documents(documents, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+                chunks = chunker(documents)
                 assign_chunk_id(chunks)
                 print(f"Created {len(chunks)} chunks")
                 vector_store.add_documents(chunks)
@@ -104,7 +105,7 @@ def prepare_retrieval_resources(
 
             # Create BM25 index again
             print("\nCreating bm25 index...")
-            chunks = prepare_chunks(source_path, loader, metadata_extractor)
+            chunks = prepare_chunks(source_path, loader, metadata_extractor, chunker)
 
             bm25_index = build_bm25_index(chunks, top_k=BM25_TOP_K)
             save_bm25_index(bm25_index, bm25_path)

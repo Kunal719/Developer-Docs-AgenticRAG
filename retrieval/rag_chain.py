@@ -18,7 +18,9 @@ def build_rag_chain(
         reranker: BaseReranker, 
         llm: BaseChatModel,  
         prompt: ChatPromptTemplate = rag_prompt, 
-        observer: PipelineObserver | None = None
+        observer: PipelineObserver | None = None,
+        retrieval_only: bool = False,
+        multi_query_retriever = None
         ):
     """
     Build the end-to-end Retrieval-Augmented Generation (RAG) chain.
@@ -32,14 +34,23 @@ def build_rag_chain(
         A runnable LCEL RAG chain.
     """
 
-    def retrieve_and_rerank(query: str):
+    def retrieve_and_rerank(input: dict):
         """
         Retrieve documents and rerank them based on the query.
         """
-        documents = retriever.retrieve(query, observer)
-        reranked_documents = reranker.rerank(query, documents, observer)
+        retrieval_input = input["retrieval"]
+        reranker_query = input["reranker_query"]
 
-        return {"question": query, "context": reranked_documents}
+        # Retrieval
+        if isinstance(retrieval_input, list):
+            documents = multi_query_retriever.retrieve(retrieval_input, observer)
+        else:
+            documents = retriever.retrieve(retrieval_input, observer)
+
+        # Rerank
+        reranked_documents = reranker.rerank(reranker_query, documents, observer)
+
+        return {"question": reranker_query, "context": reranked_documents}
 
     # def retrieve_and_rerank(query: str):
     #     documents = retriever.retrieve(query)
@@ -105,20 +116,28 @@ def build_rag_chain(
     chain = (
         retrieve_and_rerank_documents_runnable
         | format_documents_runnable
+    )
+
+    if retrieval_only:
+        return chain
+
+    return (
+        chain
         | prompt
         # | RunnableLambda(debug_prompt)
         | llm
     )
 
-    return chain
-
-def invoke_chain(chain, question: str, observer: PipelineObserver | None = None):
+def invoke_chain(chain, chain_input: dict, observer: PipelineObserver | None = None, retrieval_only: bool = False):
 
     start = perf_counter()
-    response: AIMessage = chain.invoke(question)
+    response: AIMessage = chain.invoke(chain_input)
     end = perf_counter()
 
     latency = end - start
+
+    if retrieval_only:
+        return response 
 
     usage = response.usage_metadata
 

@@ -1,95 +1,38 @@
 [
-    {
-    "id": 1,
-    "category": "concept",
-    "intent": "definition",
-    "difficulty": "easy",
-    "question": "What is ToolNode and what problem does it solve?",
-    "expected_files": [
-      "workflows-agents.mdx",
-      "quickstart.mdx",
-      "prebuilt/langgraph/prebuilt/tool_node.py"
-    ],
-    "concepts": [
-      "ToolNode",
-      "tool execution"
-    ]
-  },
   {
-    "id": 6,
-    "category": "implementation",
-    "intent": "implementation_workflow",
-    "difficulty": "medium",
-    "question": "How do I create a custom reducer in LangGraph?",
-    "expected_files": [
-      "graph-api.mdx",
-      "use-graph-api.mdx",
-      "langgraph/langgraph/graph/state.py"
-    ],
-    "concepts": [
-      "reducers",
-      "StateGraph",
-      "state management"
-    ]
-  },
-  {
-    "id": 14,
-    "category": "reasoning",
-    "intent": "multi_document_reasoning",
-    "difficulty": "hard",
-    "question": "Explain how state flows through a LangGraph execution.",
-    "expected_files": [
-      "graph-api.mdx",
-      "use-graph-api.mdx",
-      "pregel.mdx",
-      "langgraph/langgraph/graph/state.py",
-      "langgraph/langgraph/pregel/main.py"
-    ],
-    "concepts": [
-      "StateGraph",
-      "graph execution",
-      "state management",
-      "reducers"
-  ]
-  },
-  {
-    "id": 20,
-    "category": "best_practices",
-    "intent": "edge_case",
-    "difficulty": "hard",
-    "question": "What happens if a tool throws an exception during graph execution?",
-    "expected_files": [
-      "graph-api.mdx",
-      "errors/INVALID_GRAPH_NODE_RETURN_VALUE.mdx",
-      "fault-tolerance.mdx",
-      "prebuilt/langgraph/prebuilt/tool_node.py"
-    ],
-    "concepts": [
-      "ToolNode",
-      "tool execution",
-      "error handling",
-      "graph execution"
-    ]
-  },
-  {
-    "id": 50,
-    "category": "architecture",
-    "intent": "extensibility",
+    "id": 36,
+    "category": "serialization",
+    "intent": "checkpoint_deserialization_type_reconstruction",
     "difficulty": "very_hard",
-    "question": "Design a LangGraph application where developers can add new tools, agents, and workflows without modifying the existing graph structure. Explain how you would make the system extensible.",
+    "question": "A LangGraph application stores custom Python objects in state. The checkpoint is written successfully, but after process restart the restored value is a plain structure rather than the original custom type, causing application code to fail only after resume. Explain the serialization/deserialization path through JsonPlusSerializer, how type metadata is encoded and reconstructed, when pickle or msgpack fallbacks are involved, how serializer configuration controls which Python types can be reconstructed, and why the failure can appear during resumed execution rather than at the moment the checkpoint was created.",
+    "code_snippet": "from dataclasses import dataclass\nfrom typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.checkpoint.memory import InMemorySaver\n\n@dataclass\nclass UserContext:\n    user_id: str\n    role: str\n\nclass State(TypedDict):\n    context: UserContext\n\ndef use_context(state):\n    return {\"context\": state[\"context\"]}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"use\", use_context)\nbuilder.add_edge(START, \"use\")\nbuilder.add_edge(\"use\", END)\ngraph = builder.compile(checkpointer=InMemorySaver())\n\nconfig = {\"configurable\": {\"thread_id\": \"types-1\"}}\ngraph.invoke({\"context\": UserContext(\"u1\", \"admin\")}, config)\n# Simulate restart and resume from the persisted checkpoint.",
+    "error": "",
+    "observed_behavior": "",
+    "expected_behavior": "",
     "expected_files": [
-      "workflows-agents.mdx",
-      "graph-api.mdx",
-      "use-subgraphs.mdx",
-      "choosing-apis.mdx",
-      "prebuilt/langgraph/prebuilt/tool_node.py"
+      "checkpoint/langgraph/checkpoint/serde/base.py",
+      "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+      "checkpoint/langgraph/checkpoint/serde/encrypted.py",
+      "checkpoint/langgraph/checkpoint/base/__init__.py",
+      "persistence.mdx"
     ],
     "concepts": [
-      "workflow design",
-      "graph composition",
-      "subgraphs",
-      "ToolNode",
-      "extensibility"
+      "checkpoint serialization",
+      "deserialization",
+      "JsonPlusSerializer",
+      "type reconstruction",
+      "msgpack",
+      "pickle fallback",
+      "strict deserialization"
+    ],
+    "tags": [
+      "serialization",
+      "deserialization",
+      "JsonPlusSerializer",
+      "custom_types",
+      "msgpack",
+      "pickle",
+      "checkpoint"
     ]
   }
 ]

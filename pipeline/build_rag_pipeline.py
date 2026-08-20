@@ -15,7 +15,8 @@ from langchain_core.runnables import Runnable
 # Configuration
 from config import (
     DENSE_TOP_K,
-    HYBRID_TOP_K,
+    DOC_HYBRID_TOP_K,
+    CODE_HYBRID_TOP_K,
     RRF_K,
     MODEL_NAME,
     MODEL_PROVIDER,
@@ -42,11 +43,11 @@ def build_rag_pipeline(
     print("\nBuilding retrievers...")
     doc_dense_retriever = DenseRetriever(vector_store=doc_vector_store, top_k=DENSE_TOP_K)
     doc_bm25_retriever = BM25Retriever(bm25_index=doc_bm25_index)
-    doc_hybrid_retriever = HybridRetriever(bm25_retriever=doc_bm25_retriever, dense_retriever=doc_dense_retriever, top_k=HYBRID_TOP_K, rrf_k=RRF_K)
+    doc_hybrid_retriever = HybridRetriever(bm25_retriever=doc_bm25_retriever, dense_retriever=doc_dense_retriever, top_k=DOC_HYBRID_TOP_K, rrf_k=RRF_K)
 
     code_dense_retriever = DenseRetriever(vector_store=code_vector_store, top_k=DENSE_TOP_K)
     code_bm25_retriever = BM25Retriever(bm25_index=code_bm25_index)
-    code_hybrid_retriever = HybridRetriever(bm25_retriever=code_bm25_retriever, dense_retriever=code_dense_retriever, top_k=HYBRID_TOP_K, rrf_k=RRF_K)
+    code_hybrid_retriever = HybridRetriever(bm25_retriever=code_bm25_retriever, dense_retriever=code_dense_retriever, top_k=CODE_HYBRID_TOP_K, rrf_k=RRF_K)
 
     multi_corpus_retriever = MultiCorpusRetriever(retrievers=[doc_hybrid_retriever, code_hybrid_retriever])
     

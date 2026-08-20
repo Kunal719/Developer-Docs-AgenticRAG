@@ -1,0 +1,806 @@
+[
+    {
+        "question": {
+            "id": 22,
+            "category": "debugging",
+            "intent": "subgraph_time_travel_replay_namespace",
+            "difficulty": "very_hard",
+            "question": "A graph contains an expensive subgraph and a human interrupt occurs inside that subgraph. The application obtains a checkpoint corresponding to a node in the middle of the subgraph and performs time travel by invoking the graph with that checkpoint configuration. Instead of continuing from the selected subgraph checkpoint, the entire subgraph executes again from __start__. Explain the complete mechanism that can cause this: how time-travel creates a parent fork checkpoint, how the new parent checkpoint changes the task identity, how subgraph checkpoint namespaces are derived from task IDs, why the incoming checkpoint map can still reference the old namespace, and why ReplayState can therefore fail to find the requested subgraph checkpoint.",
+            "expected_files": [
+                "use-time-travel.mdx",
+                "persistence.mdx",
+                "langgraph/langgraph/pregel/_loop.py",
+                "langgraph/langgraph/pregel/_algo.py",
+                "langgraph/langgraph/_internal/_replay.py",
+                "langgraph/langgraph/_internal/_config.py",
+                "langgraph/langgraph/pregel/_checkpoint.py",
+                "langgraph/langgraph/graph/state.py"
+            ],
+            "concepts": [
+                "time travel",
+                "checkpoint fork",
+                "checkpoint namespace",
+                "task_id",
+                "subgraph",
+                "ReplayState",
+                "PregelLoop",
+                "checkpoint map"
+            ],
+            "tags": [
+                "time_travel",
+                "subgraph_replay",
+                "checkpoint_ns",
+                "task_id",
+                "ReplayState",
+                "checkpoint_fork"
+            ],
+            "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.types import interrupt\nfrom langgraph.checkpoint.memory import InMemorySaver\n\nclass State(TypedDict):\n    value: int\n    approved: bool\n\ndef first(state):\n    return {\"value\": state[\"value\"] + 1}\n\ndef review(state):\n    interrupt(\"Review\")\n    return {\"approved\": True}\n\nchild = StateGraph(State)\nchild.add_node(\"first\", first)\nchild.add_node(\"review\", review)\nchild.add_edge(START, \"first\")\nchild.add_edge(\"first\", \"review\")\nchild.add_edge(\"review\", END)\nchild_graph = child.compile()\n\nparent = StateGraph(State)\nparent.add_node(\"child\", child_graph)\nparent.add_edge(START, \"child\")\nparent.add_edge(\"child\", END)\ngraph = parent.compile(checkpointer=InMemorySaver())\n\nconfig = {\"configurable\": {\"thread_id\": \"run-1\"}}\ngraph.invoke({\"value\": 0, \"approved\": False}, config)\n\n# Assume checkpoint_config refers to a checkpoint inside the child graph.\ngraph.invoke(None, checkpoint_config)",
+            "observed_behavior": "Replay from a subgraph checkpoint can execute earlier subgraph nodes again instead of starting at the selected node.",
+            "expected_behavior": "Replay should resolve the requested checkpoint in the original subgraph namespace and continue from that checkpoint rather than silently entering a new empty namespace.",
+            "error": null,
+            "logs": null,
+            "evidence": null,
+            "queries": [
+                "How does LangGraph time travel create a fork checkpoint before replay?",
+                "How is a subgraph checkpoint namespace derived from its parent task ID?",
+                "How does PregelLoop determine the checkpoint namespace for nested execution?",
+                "How can a parent checkpoint fork change the task ID used by a subgraph?",
+                "How does ReplayState locate a checkpoint inside a subgraph namespace?",
+                "Why can replay fall back to __start__ when the requested subgraph checkpoint namespace no longer matches?"
+            ]
+        },
+        "experiment_metadata": {
+            "version": "v5",
+            "timestamp": "2026-08-18T23:39:20.032925",
+            "embedding_model": "text-embedding-3-small",
+            "llm_provider": "openai",
+            "llm": "gpt-5.6-luna",
+            "chunk_size": 1200,
+            "chunk_overlap": 200,
+            "dense_top_k": 10,
+            "bm25_top_k": 10,
+            "hybrid_top_k": 16,
+            "rrf_k": 60,
+            "reranker_top_k": 13,
+            "reranker_name": "BAAI/bge-reranker-base",
+            "judge_model": "gpt-4o-mini",
+            "judge_provider": "openai"
+        },
+        "pipeline_stages": [
+            {
+                "name": "Dense Retriever",
+                "latency": 1.2205608999938704,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "8ac2907a1e43efa0774af2d6f439ee9a6c1b059407a87b9c783b836dee258ef5",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d587b5f45c06c6b9210dc7982c720b641874f011bfc03a80406136e5f0dbc7a9",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "26fef5e4026f913d1054b92ad63e3790d6adbbe6caef9007cd62e671f80341b7",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4a37820dbcf6922d89fd1943f5c2ec1ed574500345bc00fb5f9c7bb297890067",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "affe0de7cf1618b70c2b7d9d3f903d1b6c44f0d98badf4f4a7266637e3770a9b",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "fd054519ffe987333d35781e0713e70822f6b548db74602de4e158c64e7d65f2",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "06236a534ba63e8c1de0b81b7a135f061edf75397ac11588f7e83a836c718548",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a9eb1eb1da25eb41972317f0117105f4a311b6ee6559f512cfa3bd94c7b8a89f",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8513e8a6195ba3c73d1e555bdbf5c2ea44350ad8ef74635b9abfd484ef6470c9",
+                        "source": "use-subgraphs.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "dc4534f7a6412aa3c501879f5fc1d82171ce9a7ed9da3409d8c2a1c547c905b2",
+                        "source": "use-subgraphs.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.08461779996287078,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "aeaa981ead15954ed12be3052101b825b1ee39ff359be525cad042477c4714f6",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "fd054519ffe987333d35781e0713e70822f6b548db74602de4e158c64e7d65f2",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d587b5f45c06c6b9210dc7982c720b641874f011bfc03a80406136e5f0dbc7a9",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "174fe65fd96c3b26818564ce0f9c29a121cf007ae1ea678b96965cdf2e492eab",
+                        "source": "persistence.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4fa314ce628439e88dcbe3d972435efea5bc375ddba9fd4403fbacda0124a198",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8513e8a6195ba3c73d1e555bdbf5c2ea44350ad8ef74635b9abfd484ef6470c9",
+                        "source": "use-subgraphs.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "80f953a46d65b89ee0516f9666332f6e636d22363bcaaf51b1140007f9204782",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a20a05ea6c22a452042d8ab1215eb5e0ba4f0bfbf38dff43ba9e4da7696d75fa",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ecb6c361f7e8f04f5267d2a9d68db5d759ebbb0f5ea832b9ee8031d7926910fe",
+                        "source": "persistence.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4a37820dbcf6922d89fd1943f5c2ec1ed574500345bc00fb5f9c7bb297890067",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.2599975131452084e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "d587b5f45c06c6b9210dc7982c720b641874f011bfc03a80406136e5f0dbc7a9",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.03200204813108039,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "fd054519ffe987333d35781e0713e70822f6b548db74602de4e158c64e7d65f2",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.03128054740957967,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "4a37820dbcf6922d89fd1943f5c2ec1ed574500345bc00fb5f9c7bb297890067",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.029910714285714284,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "8513e8a6195ba3c73d1e555bdbf5c2ea44350ad8ef74635b9abfd484ef6470c9",
+                        "source": "use-subgraphs.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.02964426877470356,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "8ac2907a1e43efa0774af2d6f439ee9a6c1b059407a87b9c783b836dee258ef5",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "aeaa981ead15954ed12be3052101b825b1ee39ff359be525cad042477c4714f6",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "26fef5e4026f913d1054b92ad63e3790d6adbbe6caef9007cd62e671f80341b7",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "174fe65fd96c3b26818564ce0f9c29a121cf007ae1ea678b96965cdf2e492eab",
+                        "source": "persistence.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "affe0de7cf1618b70c2b7d9d3f903d1b6c44f0d98badf4f4a7266637e3770a9b",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "4fa314ce628439e88dcbe3d972435efea5bc375ddba9fd4403fbacda0124a198",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "06236a534ba63e8c1de0b81b7a135f061edf75397ac11588f7e83a836c718548",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "80f953a46d65b89ee0516f9666332f6e636d22363bcaaf51b1140007f9204782",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 0.4938859000103548,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "ea0177e73ad684e3b60aab2140c4bcc241441b159c2b072a158cf64a1fc3f868",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1bf6e8185ae04ad91348d47e016f7736620b56f4d197dbfc41fb408302f03183",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b4fe1e7743717bb0eeb17af5342aed68ffb637d082c3115b12effdab2c71225c",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6f53d0374e3db1b303309e634ee9754a9f3864f3b8520a5ab729c405bdd69538",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "97663e5379d6eb7432933a6ed08c95f25bcee12570912cceef296656794fc4ce",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d091e0c264c6cb1a15912406aa85e00ccc21c8ec73ad6fa3cd62c261a8aabcea",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f0e92e4a1bd835fc349cfb5daf8a00d51c176bbaa387a005bc7b19c4c5aa62e7",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c82bf9a564e6f3261e0de531df25488aadba6c5a4b311a695ab27cf50de08b49",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "38185ed2094975b242beb756ddb2596b7b7579921557173a8dab38365c4d712f",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.07140739995520562,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "6f53d0374e3db1b303309e634ee9754a9f3864f3b8520a5ab729c405bdd69538",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ea0177e73ad684e3b60aab2140c4bcc241441b159c2b072a158cf64a1fc3f868",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1bf6e8185ae04ad91348d47e016f7736620b56f4d197dbfc41fb408302f03183",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5d5fbe6abea93f661ebcafe9f8699caa1a354479c9738815488f5b2ad61ef948",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f26d69a95abbb23c833f741afb55a20be8e2b12318126e455fd90dd597995323",
+                        "source": "checkpoint-sqlite/langgraph/checkpoint/sqlite/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "54851effaa88959930e4cfe7e648a16cc7ecb3b41d38658c8524ff9b3d33acf8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "24fbb69ade57e17a1f7b8e49baa2d9b37955095d37c873ff87ecb16895795aea",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.250003257766366e-05,
+                "top_k": 16,
+                "documents": [
+                    {
+                        "chunk_id": "ea0177e73ad684e3b60aab2140c4bcc241441b159c2b072a158cf64a1fc3f868",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03252247488101534,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "6f53d0374e3db1b303309e634ee9754a9f3864f3b8520a5ab729c405bdd69538",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.032018442622950824,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "1bf6e8185ae04ad91348d47e016f7736620b56f4d197dbfc41fb408302f03183",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03128054740957967,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "b4fe1e7743717bb0eeb17af5342aed68ffb637d082c3115b12effdab2c71225c",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "97663e5379d6eb7432933a6ed08c95f25bcee12570912cceef296656794fc4ce",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "d091e0c264c6cb1a15912406aa85e00ccc21c8ec73ad6fa3cd62c261a8aabcea",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "5d5fbe6abea93f661ebcafe9f8699caa1a354479c9738815488f5b2ad61ef948",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "f0e92e4a1bd835fc349cfb5daf8a00d51c176bbaa387a005bc7b19c4c5aa62e7",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "f26d69a95abbb23c833f741afb55a20be8e2b12318126e455fd90dd597995323",
+                        "source": "checkpoint-sqlite/langgraph/checkpoint/sqlite/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 13
+                    },
+                    {
+                        "chunk_id": "c82bf9a564e6f3261e0de531df25488aadba6c5a4b311a695ab27cf50de08b49",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014492753623188406,
+                        "reranker_score": null,
+                        "rank": 14
+                    },
+                    {
+                        "chunk_id": "54851effaa88959930e4cfe7e648a16cc7ecb3b41d38658c8524ff9b3d33acf8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014492753623188406,
+                        "reranker_score": null,
+                        "rank": 15
+                    },
+                    {
+                        "chunk_id": "38185ed2094975b242beb756ddb2596b7b7579921557173a8dab38365c4d712f",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014285714285714285,
+                        "reranker_score": null,
+                        "rank": 16
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 27.2940655000275,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "06236a534ba63e8c1de0b81b7a135f061edf75397ac11588f7e83a836c718548",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.4819769263267517,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.4557541310787201,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "fd054519ffe987333d35781e0713e70822f6b548db74602de4e158c64e7d65f2",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.43306806683540344,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "affe0de7cf1618b70c2b7d9d3f903d1b6c44f0d98badf4f4a7266637e3770a9b",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.43306806683540344,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.33524271845817566,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "8513e8a6195ba3c73d1e555bdbf5c2ea44350ad8ef74635b9abfd484ef6470c9",
+                        "source": "use-subgraphs.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.27797600626945496,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "b4fe1e7743717bb0eeb17af5342aed68ffb637d082c3115b12effdab2c71225c",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.270041823387146,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "4a37820dbcf6922d89fd1943f5c2ec1ed574500345bc00fb5f9c7bb297890067",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.26664403080940247,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "26fef5e4026f913d1054b92ad63e3790d6adbbe6caef9007cd62e671f80341b7",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.26664403080940247,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "6f53d0374e3db1b303309e634ee9754a9f3864f3b8520a5ab729c405bdd69538",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.17538587749004364,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "d587b5f45c06c6b9210dc7982c720b641874f011bfc03a80406136e5f0dbc7a9",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.12903304398059845,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "8ac2907a1e43efa0774af2d6f439ee9a6c1b059407a87b9c783b836dee258ef5",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.12903304398059845,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "d091e0c264c6cb1a15912406aa85e00ccc21c8ec73ad6fa3cd62c261a8aabcea",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.10737256705760956,
+                        "rank": 13
+                    }
+                ]
+            }
+        ],
+        "overall_metrics": {
+            "total_latency": 56.50674099999014,
+            "total_cost": 0.0089064,
+            "recall_at_k": 0.75,
+            "precision_at_k": 0.5714285714285714,
+            "hit_rate": 1.0,
+            "mrr": 1.0
+        },
+        "generation_metrics": {
+            "answer": "## Summary\n\nThe behavior can result from a mismatch between:\n\n1. the **subgraph checkpoint namespace stored in the incoming checkpoint configuration**, and  \n2. the **new namespace computed after time travel creates a fork checkpoint**.\n\nA subgraph namespace includes the parent task's ID. If the parent creates a fork checkpoint, the task ID can change. The subgraph then computes a different namespace, while the replay configuration may still refer to the old one. Replay can consequently fail to resolve the requested subgraph checkpoint and begin execution from an empty/new subgraph state.\n\nThere is also an important configuration issue in the example: `child_graph` is compiled without its own checkpointer. According to the time-travel documentation, that means the parent treats the entire child execution as one super-step. Checkpoints cannot be selected between `first` and `review` in that configuration. To time travel within the child, the subgraph must have its own checkpoint history.\n\n## 1. How time travel creates a fork checkpoint\n\nWhen `PregelLoop._first` determines that execution is time traveling, it enters the resuming path. The implementation identifies time travel using logic equivalent to:\n\n- a previous checkpoint exists,\n- the execution is replaying,\n- and the input is not an ordinary resume operation.\n\nFor a time-travel replay, `_first` removes cached `RESUME` writes:\n\n```python\nself.checkpoint_pending_writes = [\n    w for w in self.checkpoint_pending_writes if w[1] != RESUME\n]\n```\n\nThis ensures that interrupts encountered during replay fire again instead of returning stale resume values.\n\nIt then creates a fork checkpoint:\n\n```python\nif is_time_traveling and self.checkpoint_metadata.get(\"source\") not in (\n    \"update\",\n    \"fork\",\n):\n    self.checkpoint_pending_writes = [\n        w for w in self.checkpoint_pending_writes if w[1] != INTERRUPT\n    ]\n    self._put_checkpoint({\"source\": \"fork\"})\n```\n\nThis fork is created before replayed execution proceeds. The implementation comments explain that the fork is needed so the replayed execution has a new branch and does not continue writing into the old checkpoint history.\n\n## 2. How a subgraph checkpoint namespace is derived\n\nWhen a parent state snapshot is assembled, `_aprepare_state_snapshot` constructs the namespace for each subgraph task as:\n\n```python\ntask_ns = f\"{task.name}{NS_END}{task.id}\"\n```\n\nFor a subgraph node named `child`, this is conceptually:\n\n```text\nchild:<parent-task-id>\n```\n\nThe exact separator is represented by the internal `NS_END` constant.\n\nIf the parent itself is nested, its namespace is prepended:\n\n```python\nif parent_ns:\n    task_ns = f\"{parent_ns}{NS_SEP}{task_ns}\"\n```\n\nThus, nested namespaces are derived from the chain of parent task names and task IDs.\n\nThe relevant implementation code is:\n\n```python\nparent_ns = saved.config[CONF].get(CONFIG_KEY_CHECKPOINT_NS, \"\")\ntask_ns = f\"{task.name}{NS_END}{task.id}\"\nif parent_ns:\n    task_ns = f\"{parent_ns}{NS_SEP}{task_ns}\"\n```\n\n## 3. How nested execution receives its namespace\n\nFor a subgraph task, the parent creates a configuration containing the computed namespace:\n\n```python\nconfig = {\n    CONF: {\n        \"thread_id\": saved.config[CONF][\"thread_id\"],\n        CONFIG_KEY_CHECKPOINT_NS: task_ns,\n    }\n}\n```\n\nWhen recursively inspecting the subgraph, the parent passes that namespace to the subgraph's `aget_state` call.\n\nFor execution, `PregelLoop._first` also propagates replay-related information to nested graphs. For an outer graph, it creates a `ReplayState` when time traveling:\n\n```python\nreplay_state = ReplayState(replay_checkpoint_id)\n```\n\nIt then patches the configuration with:\n\n```python\nself.config = patch_configurable(\n    self.config,\n    {\n        CONFIG_KEY_RESUMING: is_resuming,\n        CONFIG_KEY_REPLAY_STATE: replay_state,\n    },\n)\n```\n\nThe implementation comments state that these flags allow subgraphs to find the corresponding checkpoint without refetching the parent.\n\nThe nested graph's effective checkpoint namespace therefore comes from the configuration supplied by its parent, and that configuration is based on the current parent task identity.\n\n## 4. How a parent fork can change the subgraph task ID\n\nThe subgraph namespace contains the parent task ID. Therefore:\n\n```text\nsubgraph namespace = subgraph node name + parent task ID\n```\n\nA time-travel fork creates a new parent checkpoint. The implementation explicitly notes that replaying from a checkpoint changes task IDs:\n\n```python\n# The fork will have a new checkpoint_id which changes\n# task IDs — stale interrupt writes would accumulate and\n# confuse the multiple-interrupt check in future resumes.\n```\n\nTherefore, an original execution might have produced:\n\n```text\nchild:<old-task-id>\n```\n\nAfter the parent creates a fork checkpoint, the replayed parent execution can produce:\n\n```text\nchild:<new-task-id>\n```\n\nBecause the task ID is part of the namespace, the child now has a different effective checkpoint namespace.\n\nThis is the central identity transition:\n\n```text\nold parent task ID\n    -> old child checkpoint namespace\n\nparent fork\n    -> new parent task ID\n\nnew parent task ID\n    -> new child checkpoint namespace\n```\n\nThe exact task-ID generation algorithm is not included in the retrieved context, but the implementation explicitly documents that creating the fork changes task IDs.\n\n## 5. How the old checkpoint map can remain in the incoming configuration\n\nThe incoming time-travel configuration can contain checkpoint-map information associated with the original execution. That map identifies checkpoint namespaces that existed before the fork.\n\nHowever, `_first` creates a new fork checkpoint and changes the task identity used to derive the nested namespace. The shown implementation does not rewrite the old namespace entries in the incoming checkpoint map to the newly derived task namespace.\n\nThis produces a possible mismatch:\n\n```text\ncheckpoint map:\n    child:<old-task-id>\n\nnew nested execution:\n    child:<new-task-id>\n```\n\nThis conclusion is an inference from the following retrieved facts:\n\n- subgraph namespaces include task IDs;\n- the fork changes task IDs;\n- replay uses checkpoint-map information to identify subgraph checkpoints;\n- the displayed code does not show a namespace-map rewrite after the fork.\n\nThe retrieved context does not provide the complete implementation of checkpoint-map construction or lookup, so it does not establish every detail of how stale entries are retained. It does establish the conditions under which the old and new namespaces can differ.\n\n## 6. How `ReplayState` locates a subgraph checkpoint\n\nThe retrieved implementation shows that `ReplayState` is initialized with a checkpoint ID and maintains a set of visited namespaces:\n\n```python\nclass ReplayState:\n    def __init__(self, checkpoint_id: str) -> None:\n        self.checkpoint_id = checkpoint_id\n        self._visited_ns: set[str] = set()\n```\n\nDuring time travel, the outer loop creates it using the checkpoint being replayed:\n\n```python\nreplay_state = ReplayState(replay_checkpoint_id)\n```\n\nFor a fork created from an `update` or `fork` checkpoint, the implementation uses the previous checkpoint ID when propagating replay state:\n\n```python\nif (\n    self.checkpoint_metadata.get(\"source\")\n    in (\"update\", \"fork\")\n    and self.prev_checkpoint_config\n):\n    replay_checkpoint_id = self.prev_checkpoint_config[CONF].get(\n        CONFIG_KEY_CHECKPOINT_ID, replay_checkpoint_id\n    )\n```\n\nThe implementation comments say this lets subgraphs locate their corresponding checkpoint.\n\nThe complete lookup method is not included in the retrieved context, so the exact traversal algorithm used by `ReplayState` cannot be stated. The supported behavior is:\n\n- `ReplayState` carries the checkpoint ID being replayed;\n- nested execution uses the checkpoint namespace from its configuration;\n- the nested graph determines whether its namespace is present in the checkpoint map;\n- the replay machinery uses this information to locate the corresponding subgraph checkpoint.\n\n## 7. Why lookup failure can cause execution from `__start__`\n\n`PregelLoop._first` treats a nested graph as being at a time-travel checkpoint only when its own namespace is present in the checkpoint map:\n\n```python\nself.is_nested\nand configurable.get(CONFIG_KEY_CHECKPOINT_NS, \"\")\n    in configurable.get(CONFIG_KEY_CHECKPOINT_MAP, {})\n```\n\nIf the newly computed namespace is:\n\n```text\nchild:<new-task-id>\n```\n\nbut the checkpoint map contains only:\n\n```text\nchild:<old-task-id>\n```\n\nthen the nested graph's namespace is not found in the map.\n\nThe replay machinery therefore cannot associate the nested execution with the requested internal checkpoint. The resulting behavior—starting the subgraph from its beginning—is the logical consequence of entering the subgraph without a resolvable checkpoint for that namespace. This fallback behavior is an inference from the namespace check and the documented replay model; the exact fallback function is not included in the retrieved context.\n\n## 8. Effect of the example's checkpointer configuration\n\nThe example has:\n\n```python\nchild_graph = child.compile()\n```\n\nand only the parent is compiled with:\n\n```python\ngraph = parent.compile(checkpointer=InMemorySaver())\n```\n\nThe documentation states that a subgraph without its own checkpointer inherits the parent's checkpointer and is treated by the parent as a single super-step:\n\n- there is one parent-level checkpoint for the whole subgraph execution;\n- time travel from before the subgraph re-executes the subgraph from scratch;\n- time travel cannot target a point between nodes inside that subgraph.\n\nTherefore, for the code shown, a checkpoint between `first` and `review` is not a supported parent-level time-travel granularity. The expected behavior of resuming specifically from a child-internal checkpoint requires giving the child its own checkpoint history, as documented by the “Subgraph checkpointer” option.\n\nSo there are two related cases:\n\n1. **The code exactly as shown:**  \n   The child has no own checkpointer, so replaying from the parent level re-executes the child as a whole. This is documented behavior.\n\n2. **A child with its own checkpoint history:**  \n   Replay can target a checkpoint inside the child, but the parent-fork/task-ID/namespace mismatch described above can prevent the requested child checkpoint from being resolved. In that situation, the child can fall back to a new execution path beginning at `START`.",
+            "answer_length": 10507,
+            "prompt_tokens": 8018,
+            "completion_tokens": 3039,
+            "total_tokens": 11057,
+            "estimated_cost": 0.0052504,
+            "generation_latency": 56.506711399997585
+        },
+        "judge_evaluation": {
+            "correctness": {
+                "score": 5.0,
+                "justification": "The answer accurately explains the mechanism behind the behavior described in the user question, covering all relevant aspects of time travel, checkpointing, and namespace handling as supported by the retrieved context."
+            },
+            "groundedness": {
+                "score": 5.0,
+                "justification": "All significant claims made in the answer are well supported by the retrieved context, including details about how namespaces are derived, how fork checkpoints are created, and how ReplayState operates."
+            },
+            "completeness": {
+                "score": 5.0,
+                "justification": "The answer thoroughly addresses all important aspects of the user's question, including the mechanisms of time travel, checkpointing, and the implications of task identity changes."
+            },
+            "hallucination": {
+                "score": 0.0,
+                "justification": "There are no unsupported or fabricated claims in the answer; all information is derived from the retrieved context."
+            },
+            "missing_concepts": [],
+            "unsupported_claims": []
+        }
+    }
+]

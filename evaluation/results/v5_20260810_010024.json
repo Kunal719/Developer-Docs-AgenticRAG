@@ -4278,32 +4278,32 @@
             "category": "debugging",
             "intent": "duplicate_execution",
             "difficulty": "very_hard",
-            "question": "Following a server restart, users report that the same external payment API is called twice even though the graph resumes successfully. Analyze the scenario and determine the architectural issue that could cause duplicate execution.",
-            "expected_files": [
-                "fault-tolerance.mdx",
-                "interrupts.mdx",
-                "checkpointers.mdx",
-                "checkpoint/langgraph/checkpoint/base/__init__.py",
-                "langgraph/langgraph/pregel/_checkpoint.py"
-            ],
-            "concepts": [
-                "fault tolerance",
-                "checkpointing",
-                "interrupts",
-                "workflow design",
-                "external side effects"
-            ],
-            "tags": [
-                "duplicate_execution",
-                "non_idempotent_side_effect",
-                "recovery_semantics"
-            ],
-            "code_snippet": "builder.add_node(\"payment\", payment_tool)\n\nbuilder.add_edge(\"assistant\", \"payment\")\nbuilder.add_edge(\"payment\", END)\n\ngraph = builder.compile(checkpointer=memory)",
-            "observed_behavior": "The payment provider receives duplicate payment requests after workflow recovery.",
-            "expected_behavior": "External side effects should never execute twice after recovering from a checkpoint.",
-            "error": null,
-            "logs": "INFO Loaded checkpoint.\nINFO Executing payment node.\nINFO Payment completed.\nINFO Workflow resumed.\nINFO Executing payment node."
-        },
+                "question": "Following a server restart, users report that the same external payment API is called twice even though the graph resumes successfully. Analyze the scenario and determine the architectural issue that could cause duplicate execution.",
+                "expected_files": [
+                    "fault-tolerance.mdx",
+                    "interrupts.mdx",
+                    "checkpointers.mdx",
+                    "checkpoint/langgraph/checkpoint/base/__init__.py",
+                    "langgraph/langgraph/pregel/_checkpoint.py"
+                ],
+                "concepts": [
+                    "fault tolerance",
+                    "checkpointing",
+                    "interrupts",
+                    "workflow design",
+                    "external side effects"
+                ],
+                "tags": [
+                    "duplicate_execution",
+                    "non_idempotent_side_effect",
+                    "recovery_semantics"
+                ],
+                "code_snippet": "builder.add_node(\"payment\", payment_tool)\n\nbuilder.add_edge(\"assistant\", \"payment\")\nbuilder.add_edge(\"payment\", END)\n\ngraph = builder.compile(checkpointer=memory)",
+                "observed_behavior": "The payment provider receives duplicate payment requests after workflow recovery.",
+                "expected_behavior": "External side effects should never execute twice after recovering from a checkpoint.",
+                "error": null,
+                "logs": "INFO Loaded checkpoint.\nINFO Executing payment node.\nINFO Payment completed.\nINFO Workflow resumed.\nINFO Executing payment node."
+            },
         "experiment_metadata": {
             "version": "v5",
             "timestamp": "2026-08-10T00:54:28.332508",

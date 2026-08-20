@@ -12,6 +12,9 @@ from ingestion.metadata_extractor import extract_metadata
 
 from ingestion.python_loader import load_python_documents, load_selected_python_documents
 
+from ingestion.chunker import chunk_documents
+from ingestion.code_chunker import chunk_python_documents
+
 from ingestion.code_metadata_extractor import extract_code_metadata
 
 from dotenv import load_dotenv
@@ -54,13 +57,12 @@ class RAGService:
 
         # Documentation corpus
         doc_repository_status, doc_vector_store = initialize_resources(
-            GITHUB_DOC_REPO_URL,
-            LOCAL_DOC_REPO_PATH,
-            DOCUMENTATION_SPARSE_PATHS,
-            DOC_PERSISTENT_DIRECTORY,
-            DOC_COLLECTION_NAME,
-            embedding_model,
-        )
+            GITHUB_DOC_REPO_URL, 
+            LOCAL_DOC_REPO_PATH, 
+            DOCUMENTATION_SPARSE_PATHS, 
+            DOC_PERSISTENT_DIRECTORY, 
+            DOC_COLLECTION_NAME, 
+            embedding_model)
 
         doc_vector_store, doc_bm25_index = prepare_retrieval_resources(
             repository_status=doc_repository_status,
@@ -72,17 +74,17 @@ class RAGService:
             loader=load_documents,
             selected_loader=load_selected_documents,
             metadata_extractor=extract_metadata,
+            chunker=chunk_documents
         )
 
         # Implementation corpus
         code_repository_status, code_vector_store = initialize_resources(
-            GITHUB_CODE_REPO_URL,
-            LOCAL_CODE_REPO_PATH,
-            IMPLEMENTATION_SPARSE_PATHS,
-            CODE_PERSISTENT_DIRECTORY,
-            CODE_COLLECTION_NAME,
-            embedding_model,
-        )
+            GITHUB_CODE_REPO_URL, 
+            LOCAL_CODE_REPO_PATH, 
+            IMPLEMENTATION_SPARSE_PATHS, 
+            CODE_PERSISTENT_DIRECTORY, 
+            CODE_COLLECTION_NAME, 
+            embedding_model)
 
         code_vector_store, code_bm25_index = prepare_retrieval_resources(
             repository_status=code_repository_status,
@@ -94,6 +96,7 @@ class RAGService:
             loader=load_python_documents,
             selected_loader=load_selected_python_documents,
             metadata_extractor=extract_code_metadata,
+            chunker=chunk_python_documents
         )
 
         # Initialize runtime objects
