@@ -1,4 +1,7 @@
 from retrieval.base import BaseRetriever
+
+from models.retrieval_plan import MetadataFilters
+
 from evaluation.observer import PipelineObserver
 from evaluation.models import RetrievedDocument
 
@@ -8,8 +11,7 @@ from time import perf_counter
 
 class MultiQueryRetrievalStrategy():
 
-    def __init__(self, retriever: BaseRetriever, top_k: int, rrf_k: int):
-        self._retriever = retriever
+    def __init__(self, top_k: int, rrf_k: int):
         self._top_k = top_k
         self._rrf_k = rrf_k
 
@@ -36,14 +38,14 @@ class MultiQueryRetrievalStrategy():
 
         return fused_docs, fused_scores
 
-    def retrieve(self, queries: list[str], observer: PipelineObserver | None = None) -> list[Document]:
+    def retrieve(self, queries: list[str], retriever: BaseRetriever, filters: MetadataFilters | None = None, observer: PipelineObserver | None = None) -> list[Document]:
 
         query_results = []
 
         start_time = perf_counter()
         for query in queries:
             # We will not add internal query retrieval stages in observer
-            documents = self._retriever.retrieve(query, observer=None)
+            documents = retriever.retrieve(query, observer=None, filters=filters)
 
             query_results.append(documents)
 

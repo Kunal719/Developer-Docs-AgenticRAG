@@ -12,6 +12,9 @@ class RepositoryStatus(Enum):
     UPDATED = "updated"
     UNCHANGED = "unchanged"
 
+def _normalize(paths):
+    return {p.strip("/") for p in paths}
+
 def load_repository(repo_url: str, sparse_paths: list[str], local_path: Path, branch: str = "main", check_for_updates: bool = True,) -> tuple[Path, RepositoryStatus]:
     """
     Clone or update a GitHub repository using sparse checkout.
@@ -58,18 +61,32 @@ def load_repository(repo_url: str, sparse_paths: list[str], local_path: Path, br
             # pulling the repository when unrelated files outside the sparse
             # checkout path have changed.
 
-            if local_commit.hexsha == remote_commit.hexsha:
+            try:
+                current_paths = _normalize(repo.git.sparse_checkout("list").splitlines())
+            except GitCommandError:
+                current_paths = set()
+
+            paths_changed = current_paths != _normalize(sparse_paths)
+
+            if local_commit.hexsha != remote_commit.hexsha:
+                # This repository is treated as a read-only mirror of the upstream
+                # documentation. Rather than merging histories with `git pull`, we
+                # simply make the local checkout identical to origin/<branch>.
+                repo.git.reset("--hard", f"origin/{branch}")
+                status = RepositoryStatus.UPDATED
+            elif paths_changed:
+                status = RepositoryStatus.UPDATED
+            else:
+                status = RepositoryStatus.UNCHANGED
+
+            repo.git.sparse_checkout("set", *sparse_paths)
+
+            if status == RepositoryStatus.UPDATED:
+                print("Repository updated successfully.")
+            else:
                 print("Repository is already up to date.")
-                return local_path, RepositoryStatus.UNCHANGED
 
-            # This repository is treated as a read-only mirror of the upstream
-            # documentation. Rather than merging histories with `git pull`, we
-            # simply make the local checkout identical to origin/<branch>.
-            repo.git.reset("--hard", f"origin/{branch}")
-
-            print("Repository updated successfully.")
-
-            return local_path, RepositoryStatus.UPDATED
+            return local_path, status
 
         print("Cloning documentation repository...")
 

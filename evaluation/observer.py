@@ -3,7 +3,7 @@ from evaluation.models import PipelineStage, RetrievedDocument, GenerationMetric
 class PipelineObserver():
     def __init__(self):
         self._pipeline_stages: list[PipelineStage] = []
-        self._generation_metrics: GenerationMetrics | None = None
+        self._generation_metrics: list[GenerationMetrics] | None = None
         self._context = None
 
     def record_stage(self, name: str, latency: float, top_k: int, documents: list[RetrievedDocument]) -> None:
@@ -14,18 +14,23 @@ class PipelineObserver():
         current_pipeline = PipelineStage(name=name, latency=latency, top_k=top_k, documents=documents)
         self._pipeline_stages.append(current_pipeline)
 
-    def record_generation(self, answer: str, answer_length: int, prompt_tokens: int, completion_tokens: int, total_tokens: int, estimated_cost: float, generation_latency: float) -> None:
+    def record_generation(self, name: str, round_number: str, answer: str, answer_length: int, prompt_tokens: int, completion_tokens: int, total_tokens: int, estimated_cost: float, generation_latency: float, gaps_detected: list[str], is_complete: bool) -> None:
         """
         Record the metrics of Generation
         """
         self._generation_metrics = GenerationMetrics(
+            name=name,
+            round_number=round_number,
             answer=answer, 
             answer_length=answer_length,
             prompt_tokens=prompt_tokens, 
             completion_tokens=completion_tokens, 
             total_tokens=total_tokens, 
             estimated_cost=estimated_cost, 
-            generation_latency=generation_latency)
+            generation_latency=generation_latency,
+            gaps_detected=gaps_detected,
+            is_complete=is_complete
+        )
 
     def record_context(self, context: str) -> None:
         self._context = context

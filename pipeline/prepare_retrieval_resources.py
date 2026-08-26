@@ -35,7 +35,7 @@ def prepare_retrieval_resources(
         The vector store and BM25 index.
 
     """
-    repository_status = RepositoryStatus.UPDATED
+    
     if repository_status is RepositoryStatus.CLONED:
         chunks = prepare_chunks(source_path, loader, metadata_extractor, chunker)
 

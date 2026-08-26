@@ -34,9 +34,12 @@ RRF_K = 60
 
 MULTI_QUERY_TOP_K = 40
 
+METADATA_DEFAULT_RETRIEVAL_LIMIT = 5
+
 RERANKER_MODEL = "BAAI/bge-reranker-base"
 RERANK_CANDIDATES = 15
 RERANK_TOP_K = 13
+GAP_RERANK_TOP_K = 5
 
 MODEL_NAME = "gpt-5.6-luna"
 MODEL_PROVIDER = "openai"
@@ -51,8 +54,13 @@ REBUILD_INDEX = False
 GENERATION_INPUT_PRICE = 0.2
 GENERATION_OUTPUT_PRICE = 1.2
 
+ROUTER_INPUT_PRICE = 0.2
+ROUTER_OUTPUT_PRICE = 1.2
+
 JUDGE_INPUT_PRICE = 0.3
 JUDGE_OUTPUT_PRICE = 2.5
+
+MAX_GENERATION_ROUNDS = 2
 
 DOCUMENTATION_SPARSE_PATHS = [
     "src/oss/langgraph",
@@ -79,11 +87,13 @@ IMPLEMENTATION_SPARSE_PATHS = [
     "libs/langgraph/langgraph/pregel/_call.py",
     "libs/langgraph/langgraph/pregel/_executor.py",
     "libs/langgraph/langgraph/pregel/_retry.py",
+    "libs/langgraph/langgraph/pregel/_io.py",
 
     # Checkpointing
     "libs/checkpoint/langgraph/checkpoint/base/__init__.py",
     "libs/checkpoint/langgraph/checkpoint/base/id.py",
     "libs/checkpoint/langgraph/checkpoint/serde/base.py",
+    "libs/checkpoint/langgraph/checkpoint/serde/types.py",
     "libs/checkpoint/langgraph/checkpoint/serde/jsonplus.py",
     "libs/checkpoint/langgraph/checkpoint/serde/encrypted.py",
     "libs/checkpoint/langgraph/checkpoint/memory/__init__.py",
@@ -127,6 +137,7 @@ IMPLEMENTATION_SPARSE_PATHS = [
     "libs/prebuilt/langgraph/prebuilt/_tool_call_transformer.py",
     "libs/prebuilt/langgraph/prebuilt/_tool_call_stream.py",
     "libs/prebuilt/langgraph/prebuilt/interrupt.py",
+    "libs/prebuilt/langgraph/prebuilt/chat_agent_executor.py",
 
     # Internal
     "libs/langgraph/langgraph/_internal/_config.py",

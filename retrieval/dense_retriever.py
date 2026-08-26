@@ -1,8 +1,14 @@
 from langchain_core.documents import Document
-from retrieval.base import BaseRetriever
 from langchain_chroma import Chroma
+
+from retrieval.base import BaseRetriever
+from retrieval.filters import build_chroma_where
+
 from evaluation.models import RetrievedDocument
 from evaluation.observer import PipelineObserver
+
+from models.retrieval_plan import MetadataFilters
+
 from time import perf_counter
 
 class DenseRetriever(BaseRetriever):
@@ -10,7 +16,7 @@ class DenseRetriever(BaseRetriever):
         self._vector_store = vector_store
         self._top_k = top_k
 
-    def retrieve(self, query: str, observer: PipelineObserver | None = None) -> list[Document]:
+    def retrieve(self, query: str, observer: PipelineObserver | None = None, filters: MetadataFilters = None) -> list[Document]:
         """
         Retrieve the most relevant documents using Dense Retriever
 
@@ -22,9 +28,16 @@ class DenseRetriever(BaseRetriever):
             List of retrieved documents
         """
 
+        where_clauses = build_chroma_where(filters)
+
+        search_kwargs = {"k": self._top_k}
+
+        if where_clauses is not None:
+            search_kwargs["filter"] = where_clauses
+
         retriever = self._vector_store.as_retriever(
             search_type = "similarity",
-            search_kwargs = {"k": self._top_k},
+            search_kwargs = search_kwargs,
         )
 
         start_time = perf_counter()

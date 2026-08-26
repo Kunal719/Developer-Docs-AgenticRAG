@@ -1,7 +1,7 @@
 from retrieval.base import BaseRetriever
 from evaluation.observer import PipelineObserver
 from langchain_core.language_models.chat_models import BaseChatModel
-from prompt.rag_prompt import rag_prompt
+from prompt.generation_prompt import generation_prompt
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
@@ -12,7 +12,7 @@ from utils.helper import calculate_estimated_cost
 def build_hybrid_rag_chain(
         retriever: BaseRetriever, 
         llm: BaseChatModel, 
-        prompt: ChatPromptTemplate = rag_prompt, 
+        prompt: ChatPromptTemplate = generation_prompt, 
         observer: PipelineObserver | None = None):
     """
     Build the end-to-end Retrieval-Augmented Generation (RAG) chain.

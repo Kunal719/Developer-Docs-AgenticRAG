@@ -1,4 +1,5 @@
-from evaluation.models import BenchmarkQuestion, PipelineStage, RetrievedDocument
+from evaluation.models import  PipelineStage, RetrievedDocument
+from models.query_input import BenchmarkQuestion
 
 class RetrievalEvaluator:
 

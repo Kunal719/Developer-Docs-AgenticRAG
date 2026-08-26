@@ -1,6 +1,6 @@
 from langchain_core.prompts import ChatPromptTemplate
 
-rag_prompt = ChatPromptTemplate.from_messages(
+generation_prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
@@ -148,6 +148,29 @@ When answering implementation questions, clearly distinguish between:
 - Unsupported Details (if any)
 
 Mention relevant documentation pages, implementation files, classes, or functions naturally when helpful.
+
+----------------------------------------
+Structured Output Rules
+----------------------------------------
+
+Return your response in the required structured format with three fields:
+
+- answer: your full response, following all rules above (Evidence Rules,
+  Grounding Rules, Reasoning Rules, Code Review Rules, Code Generation
+  Rules, Answer Style).
+
+- gaps: a list of the specific items you classified as "Unsupported" under
+  the Evidence Rules above. For each one, provide:
+  - missing_topic: what specific information is missing (e.g. a function
+    name, file, or concept — not a restatement of the whole question)
+  - suggested_query: a short, targeted search query that would likely
+    retrieve the missing evidence (prefer specific identifiers like
+    function/class/file names over vague phrasing)
+  Only include genuine gaps — do not invent a gap for something you were
+  actually able to answer via Retrieved Fact or Inference.
+
+- is_complete: true only if there are zero entries in gaps. If any
+  Unsupported item exists per the Evidence Rules, this must be false.
 
 Retrieved context:
 

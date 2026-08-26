@@ -2,7 +2,7 @@ from retrieval.base import BaseRetriever
 from reranking.base_reranker import BaseReranker
 from evaluation.observer import PipelineObserver
 from langchain_core.language_models.chat_models import BaseChatModel
-from prompt.rag_prompt import rag_prompt
+from prompt.generation_prompt import generation_prompt
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
@@ -14,7 +14,7 @@ def build_rag_chain(
         retriever: BaseRetriever, 
         reranker: BaseReranker, 
         llm: BaseChatModel,  
-        prompt: ChatPromptTemplate = rag_prompt, 
+        prompt: ChatPromptTemplate = generation_prompt, 
         observer: PipelineObserver | None = None
         ):
     """

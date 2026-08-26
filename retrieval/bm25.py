@@ -1,15 +1,21 @@
-from retrieval.base import BaseRetriever
 from langchain_community.retrievers import BM25Retriever as LangChainBM25
+from langchain_core.documents import Document
+
+from retrieval.base import BaseRetriever
+from retrieval.filters import matches_filter
+
 from evaluation.models import RetrievedDocument
 from evaluation.observer import PipelineObserver
-from langchain_core.documents import Document
+
+from models.retrieval_plan import MetadataFilters
+
 from time import perf_counter
 
 class BM25Retriever(BaseRetriever):
     def __init__(self, bm25_index: LangChainBM25):
         self._bm25_index = bm25_index
 
-    def retrieve(self, query: str, observer : PipelineObserver | None = None) -> list[Document]:
+    def retrieve(self, query: str, observer : PipelineObserver | None = None, filters: MetadataFilters = None) -> list[Document]:
         """
         Retrieve the most relevant documents using BM25
         
@@ -24,6 +30,16 @@ class BM25Retriever(BaseRetriever):
         start_time = perf_counter()
         documents = self._bm25_index.invoke(query)
         end_time = perf_counter()
+
+        filtered_docs = []
+
+        if filters is not None:
+            for doc in documents:
+                if matches_filter(doc, filters):
+                    filtered_docs.append(doc)
+
+
+        documents = filtered_docs
 
         if observer is not None:
             observer_docs: list[RetrievedDocument] = []

@@ -4,24 +4,25 @@ from datetime import datetime
 from typing import Literal
 
 from evaluation.judge_models import JudgeEvaluation
+from models.query_input import BenchmarkQuestion
 
-@dataclass
-class BenchmarkQuestion:
-    id: int
-    category: str
-    intent: str
-    difficulty: str
-    question: str
-    expected_files: list[str]
-    concepts: list[str]
-    tags: Optional[list[str]] = None
-    code_snippet: str | None = None
-    observed_behavior: str | None = None
-    expected_behavior: str | None = None
-    error: str | None = None
-    logs: str | None = None
-    evidence: list[dict] | None = None
-    queries: list[str] | None = None
+# @dataclass
+# class BenchmarkQuestion:
+#     id: int
+#     category: str
+#     intent: str
+#     difficulty: str
+#     question: str
+#     expected_files: list[str]
+#     concepts: list[str]
+#     tags: Optional[list[str]] = None
+#     code_snippet: str | None = None
+#     observed_behavior: str | None = None
+#     expected_behavior: str | None = None
+#     error: str | None = None
+#     logs: str | None = None
+#     evidence: list[dict] | None = None
+#     queries: list[str] | None = None
 
 @dataclass
 class RetrievedDocument:
@@ -59,6 +60,8 @@ class ExperimentMetadata:
 
 @dataclass
 class GenerationMetrics:
+    name: str
+    round_number: int
     answer: str
     answer_length: int
     prompt_tokens: int
@@ -66,6 +69,8 @@ class GenerationMetrics:
     total_tokens: int
     estimated_cost: float
     generation_latency: float
+    gaps_detected: list[str]
+    is_complete: bool                         
 
 @dataclass
 class OverallMetrics:

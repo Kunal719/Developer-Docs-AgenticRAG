@@ -1,7 +1,7 @@
 from retrieval.rag_chain import build_rag_chain, invoke_chain
 from retrieval.rag_chain_v3 import build_hybrid_rag_chain
 from retrieval.base import BaseRetriever
-from prompt.rag_prompt import rag_prompt
+from prompt.generation_prompt import generation_prompt
 from reranking.base_reranker import BaseReranker
 from evaluation.observer import PipelineObserver
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -78,13 +78,13 @@ class BenchmarkRunner():
 
         observer = PipelineObserver()
         if self._reranker is None:
-            chain = build_hybrid_rag_chain(self._retriever, self._llm, rag_prompt, observer=observer)
+            chain = build_hybrid_rag_chain(self._retriever, self._llm, generation_prompt, observer=observer)
         else:
             chain = build_rag_chain(
                 self._retriever, 
                 self._reranker, 
                 self._llm, 
-                rag_prompt, 
+                generation_prompt, 
                 observer=observer, 
                 retrieval_only=self._retrieval_only,
                 multi_query_retriever=self._multi_query_retriever

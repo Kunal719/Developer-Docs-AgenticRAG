@@ -1,4 +1,5 @@
-from evaluation.models import BenchmarkQuestion
+# from evaluation.models import BenchmarkQuestion
+from models.query_input import BenchmarkQuestion
 
 def calculate_estimated_cost(
     input_tokens: int,

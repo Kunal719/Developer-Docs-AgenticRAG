@@ -29,7 +29,16 @@ def build_rag_pipeline(
         doc_vector_store: Chroma, 
         doc_bm25_index: BM25Retriever,
         code_vector_store: Chroma,
-        code_bm25_index: BM25Retriever) -> tuple[Runnable, BaseRetriever, CrossEncoderReranker, BaseChatModel]:
+        code_bm25_index: BM25Retriever
+        ) -> tuple[
+        Runnable,
+        HybridRetriever,
+        HybridRetriever,
+        MultiCorpusRetriever,
+        Chroma,
+        CrossEncoderReranker,
+        BaseChatModel,
+        ]:
     """
     Build the runtime RAG pipeline.
 
@@ -76,4 +85,12 @@ def build_rag_pipeline(
     )
     print("RAG pipeline ready")
 
-    return rag_chain, multi_corpus_retriever, cross_encoder_reranker, llm
+    return (
+    rag_chain,
+    doc_hybrid_retriever,
+    code_hybrid_retriever,
+    multi_corpus_retriever,
+    code_vector_store,
+    cross_encoder_reranker,
+    llm,
+    )

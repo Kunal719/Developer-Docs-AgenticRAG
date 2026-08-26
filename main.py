@@ -162,9 +162,13 @@ def main() -> None:
 
             print("\nAssistant > ", end="", flush=True)
 
+            chain_input = {
+                "retrieval": question,
+                "reranker_query": question,
+            }
             for token in stream_chain(
                 rag_chain,
-                question,
+                chain_input
             ):
                 print(token, end="", flush=True)
 

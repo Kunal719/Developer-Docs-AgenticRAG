@@ -1,0 +1,1158 @@
+
+====================================================================================================
+STORE: DOCUMENTATION
+SOURCE: checkpointers.mdx
+CHUNK ID: e10b7840e5fab56a01dc09e876e5b7bbebc857dbd8f904d10074af748674c937
+====================================================================================================
+- **Fault-tolerance**: Checkpointing provides fault-tolerance and error recovery: if one or more nodes fail at a given superstep, you can restart your graph from the last successful step.
+<a id="pending-writes"></a>
+- **Pending writes**: When a graph node fails mid-execution at a given [super-step](#super-steps), LangGraph stores pending checkpoint writes from any other nodes that completed successfully at that super-step. When you resume graph execution from that super-step you don't re-run the successful nodes.
+
+====================================================================================================
+STORE: DOCUMENTATION
+SOURCE: checkpointers.mdx
+CHUNK ID: 003ef9cf01d8e9ce0c478509eb08345a1f69bee7fa58ce6966350f71cf240a37
+====================================================================================================
+Checkpoints are persisted and can be used to restore the state of a thread at a later time.
+
+Let's see what checkpoints are saved when a simple graph is invoked as follows:
+
+:::python
+```python
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import InMemorySaver
+from langchain_core.runnables import RunnableConfig
+from typing import Annotated
+from typing_extensions import TypedDict
+from operator import add
+
+class State(TypedDict):
+    foo: str
+    bar: Annotated[list[str], add]
+
+def node_a(state: State):
+    return {"foo": "a", "bar": ["a"]}
+
+def node_b(state: State):
+    return {"foo": "b", "bar": ["b"]}
+
+
+workflow = StateGraph(State)
+workflow.add_node(node_a)
+workflow.add_node(node_b)
+workflow.add_edge(START, "node_a")
+workflow.add_edge("node_a", "node_b")
+workflow.add_edge("node_b", END)
+
+checkpointer = InMemorySaver()
+graph = workflow.compile(checkpointer=checkpointer)
+
+config: RunnableConfig = {"configurable": {"thread_id": "1"}}
+graph.invoke({"foo": "", "bar":[]}, config)
+```
+:::
+
+:::js
+```typescript
+import { StateGraph, StateSchema, ReducedValue, START, END, MemorySaver } from "@langchain/langgraph";
+import { z } from "zod/v4";
+
+====================================================================================================
+STORE: DOCUMENTATION
+SOURCE: checkpointers.mdx
+CHUNK ID: 9c0c6a9b973b364e42b5be1269603e56b11659918731f2b7085a2b0123b3e7d8
+====================================================================================================
+- **Fault-tolerance**: Checkpointing provides fault-tolerance and error recovery: if one or more nodes fail at a given superstep, you can restart your graph from the last successful step.
+<a id="pending-writes"></a>
+- **Pending writes**: When a graph node fails mid-execution at a given [super-step](#super-steps), LangGraph stores pending checkpoint writes from any other nodes that completed successfully at that super-step. When you resume graph execution from that super-step you don't re-run the successful nodes.
+
+====================================================================================================
+STORE: DOCUMENTATION
+SOURCE: checkpointers.mdx
+CHUNK ID: 1d592f50c93d6576cc526d300890dadfcef0f7bc6a141d2beb0f686e5f34f985
+====================================================================================================
+The checkpointer uses `thread_id` as the primary key for storing and retrieving checkpoints. Without it, the checkpointer cannot save state or resume execution after an [interrupt](/oss/langgraph/interrupts), since the checkpointer uses `thread_id` to load the saved state.
+
+### Checkpoints
+
+The state of a thread at a particular point in time is called a checkpoint. A checkpoint is a snapshot of the graph state saved at each [super-step](#super-steps) and is represented by a `StateSnapshot` object (see [StateSnapshot fields](#statesnapshot-fields) for the full field reference).
+
+#### Super-steps
+
+LangGraph creates a checkpoint at each **super-step** boundary. A super-step is a single "tick" of the graph where all nodes scheduled for that step execute (potentially in parallel). For a sequential graph like `START -> A -> B -> END`, there are separate super-steps for the input, node A, and node B — producing a checkpoint after each one. Understanding super-step boundaries is important for [time travel](/oss/langgraph/use-time-travel), because you can only resume execution from a checkpoint (i.e., a super-step boundary).
+
+====================================================================================================
+STORE: DOCUMENTATION
+SOURCE: checkpointers.mdx
+CHUNK ID: 682e3a573f64f138483207e139d63f596d756872e388b7ee14916df8a5f7e958
+====================================================================================================
+In addition to super-step checkpoints, LangGraph also persists writes at the **node (task) level**. As each node within a super-step finishes, its outputs are written to the checkpointer's `checkpoint_writes` table as task entries linked to the in-progress checkpoint. These per-task writes are what enable [pending writes](#pending-writes) recovery: if another node in the same super-step fails, the successful nodes' writes are already durable and don't need to be re-run on resume. The full state snapshot is then committed once the super-step completes.
+
+LangGraph also persists writes from individual node executions within a super-step. These writes are stored as tasks and used for fault tolerance: if another node in the same super-step fails, successful node writes do not need to be recomputed when you resume. These task writes are not full `StateSnapshot` checkpoints, so time travel resumes from full checkpoints at super-step boundaries.
+
+Checkpoints are persisted and can be used to restore the state of a thread at a later time.
+
+Let's see what checkpoints are saved when a simple graph is invoked as follows:
+
+====================================================================================================
+STORE: DOCUMENTATION
+SOURCE: checkpointers.mdx
+CHUNK ID: 9a256fd813ee4caeabdaced608bbdd59e33856f4005d98c249652497bc7f4727
+====================================================================================================
+Checkpoints are persisted and can be used to restore the state of a thread at a later time.
+
+Let's see what checkpoints are saved when a simple graph is invoked as follows:
+
+:::python
+```python
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import InMemorySaver
+from langchain_core.runnables import RunnableConfig
+from typing import Annotated
+from typing_extensions import TypedDict
+from operator import add
+
+class State(TypedDict):
+    foo: str
+    bar: Annotated[list[str], add]
+
+def node_a(state: State):
+    return {"foo": "a", "bar": ["a"]}
+
+def node_b(state: State):
+    return {"foo": "b", "bar": ["b"]}
+
+
+workflow = StateGraph(State)
+workflow.add_node(node_a)
+workflow.add_node(node_b)
+workflow.add_edge(START, "node_a")
+workflow.add_edge("node_a", "node_b")
+workflow.add_edge("node_b", END)
+
+checkpointer = InMemorySaver()
+graph = workflow.compile(checkpointer=checkpointer)
+
+config: RunnableConfig = {"configurable": {"thread_id": "1"}}
+graph.invoke({"foo": "", "bar":[]}, config)
+```
+:::
+
+:::js
+```typescript
+import { StateGraph, StateSchema, ReducedValue, START, END, MemorySaver } from "@langchain/langgraph";
+import { z } from "zod/v4";
+
+====================================================================================================
+STORE: DOCUMENTATION
+SOURCE: functional-api.mdx
+CHUNK ID: 8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7
+====================================================================================================
+## Idempotency
+
+Idempotency ensures that running the same operation multiple times produces the same result. This helps prevent duplicate API calls and redundant processing if a step is rerun due to a failure. Always place API calls inside **tasks** functions for checkpointing, and design them to be idempotent in case of re-execution.
+This is particularly important for operations that result in data writes.
+When a workflow resumes, LangGraph replays completed **task** results from the checkpoint. A **task** that started but did not finish may run again on that resume, so design side effects to be idempotent. Use idempotency keys or verify existing results to avoid unintended duplication.
+
+## Common pitfalls
+
+### Handling side effects
+
+Encapsulate side effects (e.g., writing to a file, sending an email) in tasks to ensure they are not executed multiple times when resuming a workflow.
+
+<Tabs>
+    <Tab title="Incorrect">
+    In this example, a side effect (writing to a file) is directly included in the workflow, so it will be executed a second time when resuming the workflow.
+
+====================================================================================================
+STORE: IMPLEMENTATION
+SOURCE: langgraph/langgraph/config.py
+CHUNK ID: 9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce
+====================================================================================================
+Module: langgraph.langgraph.config
+Function: get_store
+
+def get_store() -> BaseStore:
+    """Access LangGraph store from inside a graph node or entrypoint task at runtime.
+
+    Can be called from inside any [`StateGraph`][langgraph.graph.StateGraph] node or
+    functional API [`task`][langgraph.func.task], as long as the `StateGraph` or the [`entrypoint`][langgraph.func.entrypoint]
+    was initialized with a store, e.g.:
+
+    ```python
+    # with StateGraph
+    graph = (
+        StateGraph(...)
+        ...
+        .compile(store=store)
+    )
+
+    # or with entrypoint
+    @entrypoint(store=store)
+    def workflow(inputs):
+        ...
+    ```
+
+    !!! warning "Async with Python < 3.11"
+
+        If you are using Python < 3.11 and are running LangGraph asynchronously,
+        `get_store()` won't work since it uses [`contextvar`](https://docs.python.org/3/library/contextvars.html) propagation (only available in [Python >= 3.11](https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task)).
+
+
+    Example: Using with `StateGraph`
+        ```python
+        from typing_extensions import TypedDict
+        from langgraph.graph import StateGraph, START
+        from langgraph.store.memory import InMemoryStore
+        from langgraph.config import get_store
+
+        store = InMemoryStore()
+        store.put(("values",), "foo", {"bar": 2})
+
+
+        class State(TypedDict):
+            foo: int
+
+
+        def my_node(state: State):
+            my_store = get_store()
+            stored_value = my_store.get(("values",), "foo").value["bar"]
+            return {"foo": stored_value + 1}
+
+
+        graph = (
+            StateGraph(State)
+            .add_node(my_node)
+            .add_edge(START, "my_node")
+            .compile(store=store)
+        )
+
+        graph.invoke({"foo": 1})
+        ```
+
+        ```pycon
+        {"foo": 3}
+        ```
+
+    Example: Using with functional API
+        ```python
+        from langgraph.func import entrypoint, task
+        from langgraph.store.memory import InMemoryStore
+        from langgraph.config import get_store
+
+        store = InMemoryStore()
+        store.put(("values",), "foo", {"bar": 2})
+
+
+        @task
+        def my_task(value: int):
+            my_store = get_store()
+            stored_value = my_store.get(("values",), "foo").value["bar"]
+            return stored_value + 1
+
+
+        @entrypoint(store=store)
+        def workflow(value: int):
+            return my_task(value).result()
+
+
+        workflow.invoke(1)
+        ```
+
+        ```pycon
+        3
+        ```
+    """
+    return get_config()[CONF][CONFIG_KEY_RUNTIME].store
+
+====================================================================================================
+STORE: IMPLEMENTATION
+SOURCE: langgraph/langgraph/types.py
+CHUNK ID: 35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb
+====================================================================================================
+Module: langgraph.langgraph.types
+Function: interrupt
+
+def interrupt(value: Any) -> Any:
+    """Interrupt the graph with a resumable exception from within a node.
+
+    The `interrupt` function enables human-in-the-loop workflows by pausing graph
+    execution and surfacing a value to the client. This value can communicate context
+    or request input required to resume execution.
+
+    In a given node, the first invocation of this function raises a `GraphInterrupt`
+    exception, halting execution. The provided `value` is included with the exception
+    and sent to the client executing the graph.
+
+    A client resuming the graph must use the [`Command`][langgraph.types.Command]
+    primitive to specify a value for the interrupt and continue execution.
+    The graph resumes from the start of the node, **re-executing** all logic.
+
+    If a node contains multiple `interrupt` calls, LangGraph matches resume values
+    to interrupts based on their order in the node. This list of resume values
+    is scoped to the specific task executing the node and is not shared across tasks.
+
+    To use an `interrupt`, you must enable a checkpointer, as the feature relies
+    on persisting the graph state.
+
+    !!! example
+
+        ```python
+        import uuid
+        from typing import Optional
+        from typing_extensions import TypedDict
+
+        from langgraph.checkpoint.memory import InMemorySaver
+        from langgraph.constants import START
+        from langgraph.graph import StateGraph
+        from langgraph.types import interrupt, Command
+
+
+        class State(TypedDict):
+            \"\"\"The graph state.\"\"\"
+
+            foo: str
+            human_value: Optional[str]
+            \"\"\"Human value will be updated using an interrupt.\"\"\"
+
+
+        def node(state: State):
+            answer = interrupt(
+                # This value will be sent to the client
+                # as part of the interrupt information.
+                \"what is your age?\"
+            )
+            print(f\"> Received an input from the interrupt: {answer}\")
+            return {\"human_value\": answer}
+
+
+        builder = StateGraph(State)
+        builder.add_node(\"node\", node)
+        builder.add_edge(START, \"node\")
+
+        # A checkpointer must be enabled for interrupts to work!
+        checkpointer = InMemorySaver()
+        graph = builder.compile(checkpointer=checkpointer)
+
+        config = {
+            \"configurable\": {
+                \"thread_id\": uuid.uuid4(),
+            }
+        }
+
+        for chunk in graph.stream({\"foo\": \"abc\"}, config):
+            print(chunk)
+
+        # > {'__interrupt__': (Interrupt(value='what is your age?', id='45fda8478b2ef754419799e10992af06'),)}
+
+        command = Command(resume=\"some input from a human!!!\")
+
+        for chunk in graph.stream(Command(resume=\"some input from a human!!!\"), config):
+            print(chunk)
+
+        # > Received an input from the interrupt: some input from a human!!!
+        # > {'node': {'human_value': 'some input from a human!!!'}}
+        ```
+
+    Args:
+        value: The value to surface to the client when the graph is interrupted.
+
+    Returns:
+        Any: On subsequent invocations within the same node (same task to be precise), returns the value provided during the first invocation
+
+    Raises:
+        GraphInterrupt: On the first invocation within the node, halts execution and surfaces the provided value to the client.
+    """
+    from langgraph._internal._constants import (
+        CONFIG_KEY_CHECKPOINT_NS,
+        CONFIG_KEY_SCRATCHPAD,
+        CONFIG_KEY_SEND,
+        RESUME,
+    )
+    from langgraph.config import get_config
+    from langgraph.errors import GraphInterrupt
+
+    conf = get_config()["configurable"]
+    # track interrupt index
+    scratchpad = conf[CONFIG_KEY_SCRATCHPAD]
+    idx = scratchpad.interrupt_counter()
+    # find previous resume values
+    if scratchpad.resume:
+        if idx < len(scratchpad.resume):
+            conf[CONFIG_KEY_SEND]([(RESUME, scratchpad.resume)])
+            return scratchpad.resume[idx]
+    # find current resume value
+    v = scratchpad.get_null_resume(True)
+    if v is not None:
+        assert len(scratchpad.resume) == idx, (scratchpad.resume, idx)
+        scratchpad.resume.append(v)
+        conf[CONFIG_KEY_SEND]([(RESUME, scratchpad.resume)])
+        return v
+    # no resume value found
+    raise GraphInterrupt(
+        (
+            Interrupt.from_ns(
+                value=value,
+                ns=conf[CONFIG_KEY_CHECKPOINT_NS],
+            ),
+        )
+    )
+
+====================================================================================================
+STORE: IMPLEMENTATION
+SOURCE: langgraph/langgraph/graph/state.py
+CHUNK ID: 54851effaa88959930e4cfe7e648a16cc7ecb3b41d38658c8524ff9b3d33acf8
+====================================================================================================
+Module: langgraph.langgraph.graph.state
+Class: StateGraph
+Method: add_node
+
+@overload
+def add_node(
+    self,
+    node: StateNode[NodeInputT, ContextT],
+    *,
+    defer: bool = False,
+    metadata: dict[str, Any] | None = None,
+    input_schema: type[NodeInputT],
+    retry_policy: RetryPolicy | Sequence[RetryPolicy] | None = None,
+    cache_policy: CachePolicy | None = None,
+    error_handler: StateNode[Any, ContextT] | None = None,
+    destinations: dict[str, str] | tuple[str, ...] | None = None,
+    timeout: float | timedelta | TimeoutPolicy | None = None,
+    trace_policy: TracePolicy | None = None,
+    **kwargs: Unpack[DeprecatedKwargs],
+) -> Self:
+    """Add a new node to the `StateGraph` where input schema is specified.
+
+    Will take the name of the function/runnable as the node name.
+
+    Args:
+        node: The function or runnable this node will run.
+        defer: Whether to defer the execution of the node until the run is about to end.
+        metadata: The metadata associated with the node.
+        input_schema: The input schema for the node.
+        retry_policy: The retry policy for the node.
+
+            If a sequence is provided, the first matching policy will be applied.
+        cache_policy: The cache policy for the node.
+        destinations: Destinations that indicate where a node can route to.
+
+            Useful for edgeless graphs with nodes that return `Command` objects.
+
+            If a `dict` is provided, the keys will be used as the target node names and the values will be used as the labels for the edges.
+
+            If a `tuple` is provided, the values will be used as the target node names.
+
+            !!! warning
+
+                This is only used for graph rendering and doesn't have any effect on the graph execution.
+
+    Example:
+        ```python
+        from typing_extensions import TypedDict
+
+        from langchain_core.runnables import RunnableConfig
+        from langgraph.graph import START, StateGraph
+
+
+        class State(TypedDict):
+            x: int
+
+
+        class NodeInput(TypedDict):
+            x: int
+
+
+        def my_node(state: NodeInput, config: RunnableConfig) -> State:
+            return {"x": state["x"] + 1}
+
+
+        builder = StateGraph(State)
+        builder.add_node(my_node, input_schema=NodeInput)  # node name will be 'my_node'
+        builder.add_edge(START, "my_node")
+        graph = builder.compile()
+        graph.invoke({"x": 1})
+        # {'x': 2}
+        ```
+
+    Returns:
+        Self: The instance of the `StateGraph`, allowing for method chaining.
+    """
+    ...
+
+====================================================================================================
+STORE: IMPLEMENTATION
+SOURCE: langgraph/langgraph/pregel/main.py
+CHUNK ID: c82bf9a564e6f3261e0de531df25488aadba6c5a4b311a695ab27cf50de08b49
+====================================================================================================
+Module: langgraph.langgraph.pregel.main
+Class: Pregel
+Method: _prepare_state_snapshot
+
+def _prepare_state_snapshot(
+    self,
+    config: RunnableConfig,
+    saved: CheckpointTuple | None,
+    recurse: BaseCheckpointSaver | None = None,
+    apply_pending_writes: bool = False,
+) -> StateSnapshot:
+    if not saved:
+        return StateSnapshot(
+            values={},
+            next=(),
+            config=config,
+            metadata=None,
+            created_at=None,
+            parent_config=None,
+            tasks=(),
+            interrupts=(),
+        )
+
+    # migrate checkpoint if needed
+    self._migrate_checkpoint(saved.checkpoint)
+
+    step = saved.metadata.get("step", -1) + 1
+    stop = step + 2
+    channels, managed = channels_from_checkpoint(
+        self.channels,
+        saved.checkpoint,
+        saver=self.checkpointer
+        if isinstance(self.checkpointer, BaseCheckpointSaver)
+        else None,
+        config=saved.config,
+    )
+    # tasks for this checkpoint
+    next_tasks = prepare_next_tasks(
+        saved.checkpoint,
+        saved.pending_writes or [],
+        self.nodes,
+        channels,
+        managed,
+        saved.config,
+        step,
+        stop,
+        for_execution=True,
+        store=self.store,
+        checkpointer=(
+            self.checkpointer
+            if isinstance(self.checkpointer, BaseCheckpointSaver)
+            else None
+        ),
+        manager=None,
+    )
+    # get the subgraphs
+    subgraphs = dict(self.get_subgraphs())
+    parent_ns = saved.config[CONF].get(CONFIG_KEY_CHECKPOINT_NS, "")
+    task_states: dict[str, RunnableConfig | StateSnapshot] = {}
+    for task in next_tasks.values():
+        if task.name not in subgraphs:
+            continue
+        # assemble checkpoint_ns for this task
+        task_ns = f"{task.name}{NS_END}{task.id}"
+        if parent_ns:
+            task_ns = f"{parent_ns}{NS_SEP}{task_ns}"
+        if not recurse:
+            # set config as signal that subgraph checkpoints exist
+            config = {
+                CONF: {
+                    "thread_id": saved.config[CONF]["thread_id"],
+                    CONFIG_KEY_CHECKPOINT_NS: task_ns,
+                }
+            }
+            task_states[task.id] = config
+        else:
+            # get the state of the subgraph
+            config = {
+                CONF: {
+                    CONFIG_KEY_CHECKPOINTER: recurse,
+                    "thread_id": saved.config[CONF]["thread_id"],
+                    CONFIG_KEY_CHECKPOINT_NS: task_ns,
+                }
+            }
+            task_states[task.id] = subgraphs[task.name].get_state(
+                config, subgraphs=True
+            )
+    # apply pending writes
+    if null_writes := [
+        w[1:] for w in saved.pending_writes or [] if w[0] == NULL_TASK_ID
+    ]:
+        apply_writes(
+            saved.checkpoint,
+            channels,
+            [PregelTaskWrites((), INPUT, null_writes, [])],
+            None,
+            self.trigger_to_nodes,
+        )
+    if apply_pending_writes and saved.pending_writes:
+        for tid, k, v in saved.pending_writes:
+            if k in (ERROR, INTERRUPT):
+                continue
+            if tid not in next_tasks:
+                continue
+            next_tasks[tid].writes.append((k, v))
+        if tasks := [t for t in next_tasks.values() if t.writes]:
+            apply_writes(
+                saved.checkpoint, channels, tasks, None, self.trigger_to_nodes
+            )
+    tasks_with_writes = tasks_w_writes(
+        next_tasks.values(),
+        saved.pending_writes,
+        task_states,
+        self.stream_channels_asis,
+    )
+    # assemble the state snapshot
+    return StateSnapshot(
+        read_channels(channels, self.stream_channels_asis),
+        tuple(t.name for t in next_tasks.values() if not t.writes),
+        patch_checkpoint_map(saved.config, saved.metadata),
+        saved.metadata,
+        saved.checkpoint["ts"],
+        patch_checkpoint_map(saved.parent_config, saved.metadata),
+        tasks_with_writes,
+        tuple([i for task in tasks_with_writes for i in task.interrupts]),
+    )
+
+====================================================================================================
+STORE: IMPLEMENTATION
+SOURCE: langgraph/langgraph/pregel/main.py
+CHUNK ID: d091e0c264c6cb1a15912406aa85e00ccc21c8ec73ad6fa3cd62c261a8aabcea
+====================================================================================================
+Module: langgraph.langgraph.pregel.main
+Class: Pregel
+Method: _aprepare_state_snapshot
+
+async def _aprepare_state_snapshot(
+    self,
+    config: RunnableConfig,
+    saved: CheckpointTuple | None,
+    recurse: BaseCheckpointSaver | None = None,
+    apply_pending_writes: bool = False,
+) -> StateSnapshot:
+    if not saved:
+        return StateSnapshot(
+            values={},
+            next=(),
+            config=config,
+            metadata=None,
+            created_at=None,
+            parent_config=None,
+            tasks=(),
+            interrupts=(),
+        )
+
+    # migrate checkpoint if needed
+    self._migrate_checkpoint(saved.checkpoint)
+
+    step = saved.metadata.get("step", -1) + 1
+    stop = step + 2
+    channels, managed = await achannels_from_checkpoint(
+        self.channels,
+        saved.checkpoint,
+        saver=self.checkpointer
+        if isinstance(self.checkpointer, BaseCheckpointSaver)
+        else None,
+        config=saved.config,
+    )
+    # tasks for this checkpoint
+    next_tasks = prepare_next_tasks(
+        saved.checkpoint,
+        saved.pending_writes or [],
+        self.nodes,
+        channels,
+        managed,
+        saved.config,
+        step,
+        stop,
+        for_execution=True,
+        store=self.store,
+        checkpointer=(
+            self.checkpointer
+            if isinstance(self.checkpointer, BaseCheckpointSaver)
+            else None
+        ),
+        manager=None,
+    )
+    # get the subgraphs
+    subgraphs = {n: g async for n, g in self.aget_subgraphs()}
+    parent_ns = saved.config[CONF].get(CONFIG_KEY_CHECKPOINT_NS, "")
+    task_states: dict[str, RunnableConfig | StateSnapshot] = {}
+    for task in next_tasks.values():
+        if task.name not in subgraphs:
+            continue
+        # assemble checkpoint_ns for this task
+        task_ns = f"{task.name}{NS_END}{task.id}"
+        if parent_ns:
+            task_ns = f"{parent_ns}{NS_SEP}{task_ns}"
+        if not recurse:
+            # set config as signal that subgraph checkpoints exist
+            config = {
+                CONF: {
+                    "thread_id": saved.config[CONF]["thread_id"],
+                    CONFIG_KEY_CHECKPOINT_NS: task_ns,
+                }
+            }
+            task_states[task.id] = config
+        else:
+            # get the state of the subgraph
+            config = {
+                CONF: {
+                    CONFIG_KEY_CHECKPOINTER: recurse,
+                    "thread_id": saved.config[CONF]["thread_id"],
+                    CONFIG_KEY_CHECKPOINT_NS: task_ns,
+                }
+            }
+            task_states[task.id] = await subgraphs[task.name].aget_state(
+                config, subgraphs=True
+            )
+    # apply pending writes
+    if null_writes := [
+        w[1:] for w in saved.pending_writes or [] if w[0] == NULL_TASK_ID
+    ]:
+        apply_writes(
+            saved.checkpoint,
+            channels,
+            [PregelTaskWrites((), INPUT, null_writes, [])],
+            None,
+            self.trigger_to_nodes,
+        )
+    if apply_pending_writes and saved.pending_writes:
+        for tid, k, v in saved.pending_writes:
+            if k in (ERROR, INTERRUPT):
+                continue
+            if tid not in next_tasks:
+                continue
+            next_tasks[tid].writes.append((k, v))
+        if tasks := [t for t in next_tasks.values() if t.writes]:
+            apply_writes(
+                saved.checkpoint, channels, tasks, None, self.trigger_to_nodes
+            )
+
+    tasks_with_writes = tasks_w_writes(
+        next_tasks.values(),
+        saved.pending_writes,
+        task_states,
+        self.stream_channels_asis,
+    )
+    # assemble the state snapshot
+    return StateSnapshot(
+        read_channels(channels, self.stream_channels_asis),
+        tuple(t.name for t in next_tasks.values() if not t.writes),
+        patch_checkpoint_map(saved.config, saved.metadata),
+        saved.metadata,
+        saved.checkpoint["ts"],
+        patch_checkpoint_map(saved.parent_config, saved.metadata),
+        tasks_with_writes,
+        tuple([i for task in tasks_with_writes for i in task.interrupts]),
+    )
+
+====================================================================================================
+STORE: IMPLEMENTATION
+SOURCE: langgraph/langgraph/pregel/main.py
+CHUNK ID: 1753e2c35cc0df8150262b02368ab64d3e8b342a26a2591eaed6705708f00c33
+====================================================================================================
+Module: langgraph.langgraph.pregel.main
+Class: Pregel
+Method: aperform_superstep
+
+async def aperform_superstep(
+    input_config: RunnableConfig, updates: Sequence[StateUpdate]
+) -> RunnableConfig:
+    # get last checkpoint
+    config = ensure_config(self.config, input_config)
+    saved = await checkpointer.aget_tuple(config)
+    if saved is not None:
+        self._migrate_checkpoint(saved.checkpoint)
+    checkpoint = (
+        copy_checkpoint(saved.checkpoint) if saved else empty_checkpoint()
+    )
+    checkpoint_previous_versions = (
+        saved.checkpoint["channel_versions"].copy() if saved else {}
+    )
+    step = saved.metadata.get("step", -1) if saved else -1
+    # merge configurable fields with previous checkpoint config
+    checkpoint_config = patch_configurable(
+        config,
+        {
+            CONFIG_KEY_CHECKPOINT_NS: config[CONF].get(
+                CONFIG_KEY_CHECKPOINT_NS, ""
+            )
+        },
+    )
+    if saved:
+        checkpoint_config = patch_configurable(config, saved.config[CONF])
+    channels, managed = await achannels_from_checkpoint(
+        self.channels,
+        checkpoint,
+        saver=self.checkpointer
+        if saved is not None
+        and isinstance(self.checkpointer, BaseCheckpointSaver)
+        else None,
+        config=saved.config if saved is not None else None,
+    )
+    values, as_node = updates[0][:2]
+    # no values, just clear all tasks
+    if values is None and as_node == END:
+        if len(updates) > 1:
+            raise InvalidUpdateError(
+                "Cannot apply multiple updates when clearing state"
+            )
+        if saved is not None:
+            # tasks for this checkpoint
+            next_tasks = prepare_next_tasks(
+                checkpoint,
+                saved.pending_writes or [],
+                self.nodes,
+                channels,
+                managed,
+                saved.config,
+                step + 1,
+                step + 3,
+                for_execution=True,
+                store=self.store,
+                checkpointer=checkpointer,
+                manager=None,
+            )
+            # apply null writes
+            if null_writes := [
+                w[1:]
+                for w in saved.pending_writes or []
+                if w[0] == NULL_TASK_ID
+            ]:
+                apply_writes(
+                    checkpoint,
+                    channels,
+                    [PregelTaskWrites((), INPUT, null_writes, [])],
+                    checkpointer.get_next_version,
+                    self.trigger_to_nodes,
+                )
+            # apply writes from tasks that already ran
+            for tid, k, v in saved.pending_writes or []:
+                if k in (ERROR, INTERRUPT):
+                    continue
+                if tid not in next_tasks:
+                    continue
+                next_tasks[tid].writes.append((k, v))
+            # clear all current tasks
+            apply_writes(
+                checkpoint,
+                channels,
+                next_tasks.values(),
+                checkpointer.get_next_version,
+                self.trigger_to_nodes,
+            )
+        # save checkpoint
+        next_config = await checkpointer.aput(
+            checkpoint_config,
+            create_checkpoint(checkpoint, channels, step),
+            {
+                "source": "update",
+                "step": step + 1,
+                "parents": saved.metadata.get("parents", {}) if saved else {},
+            },
+            get_new_channel_versions(
+                checkpoint_previous_versions, checkpoint["channel_versions"]
+            ),
+        )
+        return patch_checkpoint_map(
+            next_config, saved.metadata if saved else None
+        )
+
+    # act as an input
+    if as_node == INPUT:
+        if len(updates) > 1:
+            raise InvalidUpdateError(
+                "Cannot apply multiple updates when updating as input"
+            )
+
+        if input_writes := deque(map_input(self.input_channels, values)):
+            apply_writes(
+                checkpoint,
+                channels,
+                [PregelTaskWrites((), INPUT, input_writes, [])],
+                checkpointer.get_next_version,
+                self.trigger_to_nodes,
+            )
+
+            # apply input write to channels
+            next_step = (
+                step + 1
+                if saved and saved.metadata.get("step") is not None
+                else -1
+            )
+            next_config = await checkpointer.aput(
+                checkpoint_config,
+                create_checkpoint(checkpoint, channels, next_step),
+                {
+                    "source": "input",
+                    "step": next_step,
+                    "parents": saved.metadata.get("parents", {})
+                    if saved
+                    else {},
+                },
+                get_new_channel_versions(
+                    checkpoint_previous_versions,
+                    checkpoint["channel_versions"],
+                ),
+            )
+
+            # store the writes
+            await checkpointer.aput_writes(
+                next_config,
+                input_writes,
+                str(uuid5(UUID(checkpoint["id"]), INPUT)),
+            )
+
+            return patch_checkpoint_map(
+                next_config, saved.metadata if saved else None
+            )
+        else:
+            raise InvalidUpdateError(
+                f"Received no input writes for {self.input_channels}"
+            )
+
+    # no values, copy checkpoint
+    if as_node == "__copy__":
+        if len(updates) > 1:
+            raise InvalidUpdateError(
+                "Cannot copy checkpoint with multiple updates"
+            )
+
+        if saved is None:
+            raise InvalidUpdateError("Cannot copy a non-existent checkpoint")
+
+        next_checkpoint = create_checkpoint(checkpoint, None, step)
+
+        # copy checkpoint
+        next_config = await checkpointer.aput(
+            saved.parent_config
+            or patch_configurable(
+                saved.config, {CONFIG_KEY_CHECKPOINT_ID: None}
+            ),
+            next_checkpoint,
+            {
+                "source": "fork",
+                "step": step + 1,
+                "parents": saved.metadata.get("parents", {}),
+            },
+            {},
+        )
+
+        # we want to both clone a checkpoint and update state in one go.
+        # reuse the same task ID if possible.
+        if isinstance(values, list) and len(values) > 0:
+            # figure out the task IDs for the next update checkpoint
+            next_tasks = prepare_next_tasks(
+                next_checkpoint,
+                saved.pending_writes or [],
+                self.nodes,
+                channels,
+                managed,
+                next_config,
+                step + 2,
+                step + 4,
+                for_execution=True,
+                store=self.store,
+                checkpointer=checkpointer,
+                manager=None,
+            )
+
+            tasks_group_by = defaultdict(list)
+            user_group_by: dict[str, list[StateUpdate]] = defaultdict(list)
+
+            for task in next_tasks.values():
+                tasks_group_by[task.name].append(task.id)
+
+            for item in values:
+                if not isinstance(item, Sequence):
+                    raise InvalidUpdateError(
+                        f"Invalid update item: {item} when copying checkpoint"
+                    )
+
+                values, as_node = item[:2]
+                user_group = user_group_by[as_node]
+                tasks_group = tasks_group_by[as_node]
+
+                target_idx = len(user_group)
+                task_id = (
+                    tasks_group[target_idx]
+                    if target_idx < len(tasks_group)
+                    else None
+                )
+
+                user_group_by[as_node].append(
+                    StateUpdate(values=values, as_node=as_node, task_id=task_id)
+                )
+
+            return await aperform_superstep(
+                patch_checkpoint_map(next_config, saved.metadata),
+                [item for lst in user_group_by.values() for item in lst],
+            )
+
+        return patch_checkpoint_map(
+            next_config, saved.metadata if saved else None
+        )
+
+    # task ids can be provided in the StateUpdate, but if not,
+    # we use the task id generated by prepare_next_tasks
+    node_to_task_ids: dict[str, deque[str]] = defaultdict(deque)
+    if saved is not None and saved.pending_writes is not None:
+        # we call prepare_next_tasks to discover the task IDs that
+        # would have been generated, so we can reuse them and
+        # properly populate task.result in state history
+        next_tasks = prepare_next_tasks(
+            checkpoint,
+            saved.pending_writes,
+            self.nodes,
+            channels,
+            managed,
+            saved.config,
+            step + 1,
+            step + 3,
+            for_execution=True,
+            store=self.store,
+            checkpointer=checkpointer,
+            manager=None,
+        )
+        # collect task ids to reuse so we can properly attach task results
+        for t in next_tasks.values():
+            node_to_task_ids[t.name].append(t.id)
+
+    valid_updates: list[tuple[str, dict[str, Any] | None, str | None]] = []
+    if len(updates) == 1:
+        values, as_node, task_id = updates[0]
+        # find last node that updated the state, if not provided
+        if as_node is None and len(self.nodes) == 1:
+            as_node = tuple(self.nodes)[0]
+        elif as_node is None and not saved:
+            if (
+                isinstance(self.input_channels, str)
+                and self.input_channels in self.nodes
+            ):
+                as_node = self.input_channels
+        elif as_node is None:
+            last_seen_by_node = sorted(
+                (v, n)
+                for n, seen in checkpoint["versions_seen"].items()
+                if n in self.nodes
+                for v in seen.values()
+            )
+            # if two nodes updated the state at the same time, it's ambiguous
+            if last_seen_by_node:
+                if len(last_seen_by_node) == 1:
+                    as_node = last_seen_by_node[0][1]
+                elif last_seen_by_node[-1][0] != last_seen_by_node[-2][0]:
+                    as_node = last_seen_by_node[-1][1]
+        if as_node is None:
+            raise InvalidUpdateError("Ambiguous update, specify as_node")
+        if as_node not in self.nodes:
+            raise InvalidUpdateError(f"Node {as_node} does not exist")
+        valid_updates.append((as_node, values, task_id))
+    else:
+        for values, as_node, task_id in updates:
+            if as_node is None:
+                raise InvalidUpdateError(
+                    "as_node is required when applying multiple updates"
+                )
+            if as_node not in self.nodes:
+                raise InvalidUpdateError(f"Node {as_node} does not exist")
+
+            valid_updates.append((as_node, values, task_id))
+
+    run_tasks: list[PregelTaskWrites] = []
+    run_task_ids: list[str] = []
+
+    for as_node, values, provided_task_id in valid_updates:
+        # create task to run all writers of the chosen node
+        writers = self.nodes[as_node].flat_writers
+        if not writers:
+            raise InvalidUpdateError(f"Node {as_node} has no writers")
+        writes: deque[tuple[str, Any]] = deque()
+        task = PregelTaskWrites((), as_node, writes, [INTERRUPT])
+        # get the task ids that were prepared for this node
+        # if a task id was provided in the StateUpdate, we use it
+        # otherwise, we use the next available task id
+        prepared_task_ids = node_to_task_ids.get(as_node, deque())
+        task_id = provided_task_id or (
+            prepared_task_ids.popleft()
+            if prepared_task_ids
+            else str(uuid5(UUID(checkpoint["id"]), INTERRUPT))
+        )
+        run_tasks.append(task)
+        run_task_ids.append(task_id)
+        run = RunnableSequence(*writers) if len(writers) > 1 else writers[0]
+        # execute task
+        await run.ainvoke(
+            values,
+            patch_config(
+                config,
+                run_name=self.name + "UpdateState",
+                configurable={
+                    # deque.extend is thread-safe
+                    CONFIG_KEY_SEND: writes.extend,
+                    CONFIG_KEY_TASK_ID: task_id,
+                    CONFIG_KEY_READ: partial(
+                        local_read,
+                        _scratchpad(
+                            None,
+                            [],
+                            task_id,
+                            "",
+                            None,
+                            step,
+                            step + 2,
+                        ),
+                        channels,
+                        managed,
+                        task,
+                    ),
+                },
+            ),
+        )
+    updated_channels = get_updated_channels_from_tasks(run_tasks)
+    if saved is not None:
+        for task_id, task in zip(run_task_ids, run_tasks):
+            channel_writes = [w for w in task.writes if w[0] != PUSH]
+            if channel_writes:
+                await checkpointer.aput_writes(
+                    checkpoint_config, channel_writes, task_id
+                )
+    apply_writes(
+        checkpoint,
+        channels,
+        run_tasks,
+        checkpointer.get_next_version,
+        self.trigger_to_nodes,
+    )
+    channels_to_snapshot, checkpoint_metadata = (
+        create_checkpoint_plan_for_update_state_api(
+            channels,
+            updated_channels,
+            step=step + 1,
+            parents=saved.metadata.get("parents", {}) if saved else {},
+            saved_metadata=saved.metadata if saved else None,
+            is_fresh_thread=saved is None,
+        )
+    )
+    checkpoint = create_checkpoint(
+        checkpoint,
+        channels,
+        step + 1,
+        updated_channels=updated_channels if channels_to_snapshot else None,
+        get_next_version=checkpointer.get_next_version
+        if channels_to_snapshot
+        else None,
+        channels_to_snapshot=channels_to_snapshot,
+    )
+    next_config = await checkpointer.aput(
+        checkpoint_config,
+        checkpoint,
+        checkpoint_metadata,
+        get_new_channel_versions(
+            checkpoint_previous_versions, checkpoint["channel_versions"]
+        ),
+    )
+    for task_id, task in zip(run_task_ids, run_tasks):
+        if push_writes := [w for w in task.writes if w[0] == PUSH]:
+            await checkpointer.aput_writes(next_config, push_writes, task_id)
+    return patch_checkpoint_map(next_config, saved.metadata if saved else None)

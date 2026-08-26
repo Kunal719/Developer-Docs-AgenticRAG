@@ -20,7 +20,7 @@ from ingestion.code_metadata_extractor import extract_code_metadata
 from dotenv import load_dotenv
 from collections.abc import Iterator
 
-from prompt.rag_prompt import rag_prompt
+from prompt.generation_prompt import generation_prompt
 from utils.document_formatter import format_retrieved_context
 
 from app.schemas.query import Source, QueryResponse
@@ -142,7 +142,7 @@ class RAGService:
         context = format_retrieved_context(reranked_documents)
 
         # Build prompt using question and context
-        prompt = rag_prompt.format(question=question, context=context)
+        prompt = generation_prompt.format(question=question, context=context)
 
         # Stream the response
         yield ("status", "🤓 Making sure the answer isn't hallucinating...")
@@ -183,7 +183,7 @@ class RAGService:
             context = format_retrieved_context(reranked_documents)
     
             # Build prompt using question and context
-            prompt = rag_prompt.format(question=question, context=context)
+            prompt = generation_prompt.format(question=question, context=context)
     
             # Get full response
             response = self._llm.invoke(prompt)

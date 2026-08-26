@@ -1,6 +1,9 @@
 from retrieval.base import BaseRetriever
 from retrieval.bm25 import BM25Retriever
 from retrieval.dense_retriever import DenseRetriever
+
+from models.retrieval_plan import MetadataFilters
+
 from evaluation.observer import PipelineObserver
 from evaluation.models import RetrievedDocument
 from langchain_core.documents import Document
@@ -34,7 +37,7 @@ class HybridRetriever(BaseRetriever):
 
         return fused_docs, fused_scores
 
-    def retrieve(self, query: str, observer: PipelineObserver | None = None) -> list[Document]:
+    def retrieve(self, query: str, observer: PipelineObserver | None = None, filters: MetadataFilters = None) -> list[Document]:
         """
         Retrieve the most relevant documents using Dense Retriever and BM25 Retriever
 
@@ -46,8 +49,8 @@ class HybridRetriever(BaseRetriever):
             List of retrieved documents
         """
 
-        dense_results = self._dense_retriever.retrieve(query, observer)
-        bm25_results = self._bm25_index.retrieve(query, observer)
+        dense_results = self._dense_retriever.retrieve(query, observer, filters)
+        bm25_results = self._bm25_index.retrieve(query, observer, filters)
 
         start_time = perf_counter()
         fused_results, fused_scores = self._rrf([dense_results, bm25_results])
