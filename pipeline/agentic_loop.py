@@ -32,43 +32,54 @@ from time import perf_counter
 
 class AgenticRAG():
     def __init__(
-        self, 
-        query_input: QueryInput, 
-        reranker: BaseReranker, 
-        router_llm: BaseChatModel,
+        self,
+        query_router: QueryRouter,
         generation_llm: BaseChatModel, 
         doc_hybrid_retriever: HybridRetriever,
         code_hybrid_retriever: HybridRetriever,
         multi_corpus_retriever: MultiCorpusRetriever,
         multi_query_strategy: MultiQueryRetrievalStrategy,
-        code_vector_store: Chroma,
-        observer: PipelineObserver | None = None):
+        reranker: BaseReranker,
+        code_vector_store: Chroma):
 
-        self._query_input = query_input
-        self._reranker = reranker
-        self._router_llm = router_llm
-        self._generation_llm = generation_llm
+        self._query_router = query_router
         self._doc_hybrid_retriever = doc_hybrid_retriever
         self._code_hybrid_retriever = code_hybrid_retriever
         self._multi_corpus_retriever = multi_corpus_retriever
         self._multi_query_strategy = multi_query_strategy
+        self._reranker = reranker
         self._code_vector_store = code_vector_store
-        self._observer = observer
 
-    def _generate(self, llm: BaseChatModel, prompt: str, stage_name: str) -> GeneratedAnswer:
+        self._generation_llm = generation_llm.with_structured_output(
+            GeneratedAnswer,
+            method="json_schema",
+            include_raw=True
+        ).bind(
+            prompt_cache_key="generation_prompt",
+            prompt_cache_options={"mode": "explicit", "ttl": "30m"}
+        )
 
+    def _generate(
+            self, 
+            llm: BaseChatModel, 
+            prompt: str, 
+            stage_name: str, 
+            observer: PipelineObserver, 
+            round_number: int | None = None, 
+    ) -> GeneratedAnswer:
+        
         start_time = perf_counter()
         response = llm.invoke(prompt)
         end_time = perf_counter()
 
-        raw_response = response["raw"].usage_metadata
+        raw_response = response["raw"]
         generated_answer : GeneratedAnswer = response["parsed"]
         usage = raw_response.usage_metadata
 
-        if self._observer is not None:
-            self._observer.record_generation(
+        if observer is not None:
+            observer.record_generation(
                 name=stage_name,
-                round_number=str(generated_answer.round_number),
+                round_number=round_number,
                 answer=generated_answer.answer,
                 answer_length=len(generated_answer.answer),
                 prompt_tokens=usage["input_tokens"],
@@ -87,52 +98,52 @@ class AgenticRAG():
 
         return generated_answer
     
-    def run(self):
+    def run(self, query_input: QueryInput, observer: PipelineObserver | None = None) -> GeneratedAnswer:
         # Get retrieval plan
-        query_router = QueryRouter(self._router_llm)
-        retrieval_plan = query_router.route(self._query_input)
+        retrieval_plan = self._query_router.route(query=query_input, observer=observer)
 
         # Get retrieval candidates
         retrieval_candidates = retrieve_candidates(
-                query_input=self._query_input,
+                query_input=query_input,
                 plan=retrieval_plan,
                 doc_hybrid_retriever=self._doc_hybrid_retriever,
                 code_hybrid_retriever=self._code_hybrid_retriever,
                 multi_corpus_retriever=self._multi_corpus_retriever,
                 multi_query_strategy=self._multi_query_strategy,
                 code_vector_store=self._code_vector_store,
-                observer=self._observer
+                observer=observer
         )
 
         # Rerank retrieval candidates
-        reranker_query = build_rerank_query(self._query_input)
+        reranker_query = build_rerank_query(query_input)
         reranked_candidates = self._reranker.rerank(
             query=reranker_query,
             documents=retrieval_candidates,
-            observer=self._observer
+            observer=observer
         )
 
         all_candidates : list[Document] = reranked_candidates
 
+        # Format retrieved context and store it
+        if all_candidates and observer is not None:
+            formatted_context = format_retrieved_context(all_candidates)
+            observer.record_context(formatted_context)
+
         # Generate response
         generation_llm_prompt = generation_prompt.format(
-            context=format_retrieved_context(reranked_candidates),
+            context=formatted_context,
             question=reranker_query
         )
 
-        # Get structured response from generation llm
-        structured_generation_llm = self._generation_llm.with_structured_output(
-            GeneratedAnswer, method="json_schema", include_raw=True
-        ).bind(
-            prompt_cache_key="generation_prompt",
-            prompt_cache_options={"mode": "explicit", "ttl": "30m"}
+        generated_answer = self._generate(
+            llm=self._generation_llm,
+            prompt=generation_llm_prompt,
+            stage_name="Initial Generation",
+            observer=observer
         )
 
-        generation_response = structured_generation_llm.invoke(
-            generation_llm_prompt
-        )
-
-        generated_answer : GeneratedAnswer = generation_response["parsed"]
+        if generated_answer.is_complete:
+            return generated_answer
 
         # Check for gaps in answer
 
@@ -173,13 +184,13 @@ class AgenticRAG():
                     multi_query_strategy=self._multi_query_strategy,
                     code_vector_store=self._code_vector_store,
                     query_override=gap.suggested_query,
-                    observer=self._observer
+                    observer=observer
                 )
 
                 reranked_gap_candidates = self._reranker.rerank(
                     query=gap.suggested_query,
                     documents=gap_retrieval_candidates,
-                    observer=self._observer,
+                    observer=observer,
                     top_k=GAP_RERANK_TOP_K
                 )
 
@@ -192,18 +203,25 @@ class AgenticRAG():
             all_candidates = _dedupe(all_candidates)
             print(f"Combined candidates after gap round {round_number}: {len(all_candidates)}")
 
+            if all_candidates and observer is not None:
+                formatted_context = format_retrieved_context(all_candidates)
+                observer.record_context(formatted_context)
+
             # Format generation prompt for gap
             gap_generation_llm_prompt = generation_prompt.format(
-                context=format_retrieved_context(all_candidates),
+                context=formatted_context,
                 question=reranker_query
             )
 
             # Get structured response from generation llm
-            gap_generation_response = structured_generation_llm.invoke(
-                gap_generation_llm_prompt
+            generated_answer = self._generate(
+                llm=self._generation_llm,
+                prompt=gap_generation_llm_prompt,
+                stage_name=f"Gap Generation Round {round_number + 1}",
+                round_number=round_number + 1,
+                observer=observer
             )
 
-            generated_answer = gap_generation_response["parsed"]
             print("\n========== GAP ROUND RESULT ==========")
             print("Is complete:", generated_answer.is_complete)
             print("Remaining gaps:", len(generated_answer.gaps))

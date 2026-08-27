@@ -71,7 +71,7 @@ class BenchmarkRunner():
             reranker_top_k=RERANK_TOP_K if self._reranker is not None else None,
             reranker_name=RERANKER_MODEL if self._reranker is not None else None,
             judge_model=JUDGE_MODEL_NAME if self._judge_llm is not None else None,
-            judge_provider=JUDGE_MODEL_PROVIDER if self._judge_llm is not None else None
+            judge_llm_provider=JUDGE_MODEL_PROVIDER if self._judge_llm is not None else None
         )
 
         questions = load_questions(self._questions_path)

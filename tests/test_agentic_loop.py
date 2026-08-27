@@ -15,6 +15,8 @@ from retrieval.hybrid_retriever import HybridRetriever
 from retrieval.multi_corpus_retriever import MultiCorpusRetriever
 from retrieval.multi_query_retrieval_strategy import MultiQueryRetrievalStrategy
 
+from evaluation.observer import PipelineObserver
+
 from reranking.cross_encoder import CrossEncoderReranker
 
 from app.llm import get_llm
@@ -40,7 +42,7 @@ from config import (
 )
 
 
-def build_test_agent():
+def build_test_agent(observer : PipelineObserver | None = None):
     load_dotenv()
 
     # -------------------------
@@ -154,7 +156,7 @@ def build_test_agent():
     # Agent
     # -------------------------
     query_input = QueryInput(
-        question="How does interrupt work internally?",
+        question="How does interrupt() resume execution after a Command(resume=...) is provided?",
     )
 
     return AgenticRAG(
@@ -167,6 +169,7 @@ def build_test_agent():
         multi_corpus_retriever=multi_corpus,
         multi_query_strategy=multi_query_strategy,
         code_vector_store=code_vector_store,
+        observer=observer
     )
 
 
@@ -277,3 +280,57 @@ def test_agentic_gap_round():
     assert result.answer.strip()
     assert isinstance(result.is_complete, bool)
     assert isinstance(result.gaps, list)
+
+def test_agentic_observer():
+    observer = PipelineObserver()
+    agent = build_test_agent(observer=observer)
+
+    result = agent.run()
+
+    print("\n================ ROUTER METRICS ================")
+    print(observer.get_router_metrics())
+
+    print("\n================ GENERATION METRICS ================")
+    generation_metrics = observer.get_generation_metrics()
+
+    for i, metrics in enumerate(generation_metrics):
+        print(f"\nGeneration {i}:")
+        print(metrics)
+
+    print("\n================ PIPELINE STAGES ================")
+    for i, stage in enumerate(observer.get_pipeline_stages()):
+        print(f"\nStage {i}:")
+        print(stage)
+
+    print("\n================ FINAL ANSWER ================")
+    print(result.answer)
+
+    # Basic checks
+    assert isinstance(result, GeneratedAnswer)
+
+    # Router should have been called exactly once
+    router_metrics = observer.get_router_metrics()
+    assert router_metrics is not None
+
+    # At least initial generation should exist
+    assert generation_metrics
+    assert generation_metrics[0].name == "Initial Generation"
+
+    # Every generation should have valid telemetry
+    for metrics in generation_metrics:
+        assert metrics.prompt_tokens > 0
+        assert metrics.completion_tokens > 0
+        assert metrics.total_tokens > 0
+        assert metrics.estimated_cost >= 0
+        assert metrics.generation_latency > 0
+        assert metrics.answer.strip()
+
+    # If gap rounds happened, verify their numbering
+    gap_generations = [
+        m for m in generation_metrics
+        if m.round_number is not None
+    ]
+
+    for expected_round, metrics in enumerate(gap_generations, start=1):
+        assert metrics.round_number == expected_round
+        assert metrics.name == f"Gap Generation Round {expected_round}"

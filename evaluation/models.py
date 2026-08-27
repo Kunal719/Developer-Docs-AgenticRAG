@@ -56,12 +56,13 @@ class ExperimentMetadata:
     reranker_top_k: Optional[int] = None
     reranker_name: Optional[str] = None
     judge_model: Optional[str] = None
-    judge_provider: Optional[str] = None
+    judge_llm_provider: Optional[str] = None
+    router_llm: Optional[str] = None
+    router_llm_provider: Optional[str] = None
 
 @dataclass
 class GenerationMetrics:
     name: str
-    round_number: int
     answer: str
     answer_length: int
     prompt_tokens: int
@@ -69,8 +70,9 @@ class GenerationMetrics:
     total_tokens: int
     estimated_cost: float
     generation_latency: float
-    gaps_detected: list[str]
-    is_complete: bool                         
+    is_complete: bool 
+    round_number: int | None = None
+    gaps_detected: list[str] | None = None                       
 
 @dataclass
 class OverallMetrics:
@@ -80,6 +82,15 @@ class OverallMetrics:
     precision_at_k: Optional[float] = None
     hit_rate: Optional[float] = None
     mrr: Optional[float] = None
+
+@dataclass
+class RouterMetrics:
+    name: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    estimated_cost: float
+    router_latency: float
 
 @dataclass
 class EvaluationResult:

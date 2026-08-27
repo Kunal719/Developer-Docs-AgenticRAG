@@ -9,6 +9,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from utils.helper import calculate_estimated_cost
 from config import ROUTER_INPUT_PRICE, ROUTER_OUTPUT_PRICE
+
 from time import perf_counter
 
 class QueryRouter:
@@ -76,14 +77,13 @@ class QueryRouter:
         )
 
         if observer is not None:
-            observer.record_generation(
-                answer=plan.answer,
-                answer_length=len(plan.answer),
+            observer.record_router_metrics(
+                name="Query Router",
                 prompt_tokens=usage["input_tokens"],
                 completion_tokens=usage["output_tokens"],
                 total_tokens=usage["total_tokens"],
                 estimated_cost=router_cost,
-                generation_latency=(end_time - start_time)
+                router_latency=(end_time - start_time)
             )
 
         return plan
