@@ -150,6 +150,23 @@ When answering implementation questions, clearly distinguish between:
 Mention relevant documentation pages, implementation files, classes, or functions naturally when helpful.
 
 ----------------------------------------
+Retrieval Gap Filter Rules
+----------------------------------------
+
+When generating `suggested_filters`:
+
+- corpus may be "documentation", "implementation", or null.
+- category may be "general", "errors", "frontend", or null.
+- category is valid only when corpus is "documentation".
+- If category is specified, you MUST set corpus to "documentation".
+- Never output category with corpus: null or
+  corpus: "implementation".
+- Only include a filter when it is useful for retrieving the missing
+  evidence. Otherwise leave it null.
+- These filters are passed directly to the retrieval system, so all
+  filter combinations must satisfy these rules.
+
+----------------------------------------
 Structured Output Rules
 ----------------------------------------
 

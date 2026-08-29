@@ -15,7 +15,7 @@ class BM25Retriever(BaseRetriever):
     def __init__(self, bm25_index: LangChainBM25):
         self._bm25_index = bm25_index
 
-    def retrieve(self, query: str, observer : PipelineObserver | None = None, filters: MetadataFilters = None) -> list[Document]:
+    def retrieve(self, query: str, observer : PipelineObserver | None = None, filters: MetadataFilters = None, gap_top_k: int | None = None) -> list[Document]:
         """
         Retrieve the most relevant documents using BM25
         
@@ -25,7 +25,7 @@ class BM25Retriever(BaseRetriever):
         
         Returns:
             List of retrieved documents
-        """
+        """ 
 
         start_time = perf_counter()
         documents = self._bm25_index.invoke(query)
@@ -38,8 +38,7 @@ class BM25Retriever(BaseRetriever):
                 if matches_filter(doc, filters):
                     filtered_docs.append(doc)
 
-
-        documents = filtered_docs
+            documents = filtered_docs
 
         if observer is not None:
             observer_docs: list[RetrievedDocument] = []

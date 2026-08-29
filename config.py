@@ -1,6 +1,6 @@
 from pathlib import Path
 
-PROJECT_VERSION = "v5"
+PROJECT_VERSION = "v7"
 
 GITHUB_DOC_REPO_URL = "https://github.com/langchain-ai/docs.git"
 LOCAL_DOC_REPO_PATH =  Path("data/raw/docs")
@@ -39,14 +39,18 @@ METADATA_DEFAULT_RETRIEVAL_LIMIT = 5
 RERANKER_MODEL = "BAAI/bge-reranker-base"
 RERANK_CANDIDATES = 15
 RERANK_TOP_K = 13
+
+# GAP_DENSE_TOP_K = 10
+# GAP_BM25_TOP_K = 10
+GAP_HYBRID_TOP_K = 8
 GAP_RERANK_TOP_K = 5
 
 MODEL_NAME = "gpt-5.6-luna"
 MODEL_PROVIDER = "openai"
 MODEL_TEMP = 0.1
 
-JUDGE_MODEL_NAME = "gpt-4o-mini"
-JUDGE_MODEL_PROVIDER = "openai"
+JUDGE_MODEL_NAME = "gemini-2.5-flash"
+JUDGE_MODEL_PROVIDER = "google_genai"
 JUDGE_TEMP = 0.0
 
 REBUILD_INDEX = False

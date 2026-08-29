@@ -1,0 +1,492 @@
+[
+    {
+        "question": {
+            "question": "How does add_messages differ from writing a custom reducer, and when should each be used?",
+            "code_snippet": null,
+            "error": null,
+            "logs": null,
+            "observed_behavior": null,
+            "expected_behavior": null,
+            "id": 36,
+            "category": "comparison",
+            "intent": "messages",
+            "difficulty": "hard",
+            "expected_files": [
+                "graph-api.mdx",
+                "use-graph-api.mdx",
+                "langgraph/langgraph/graph/message.py",
+                "langgraph/langgraph/graph/state.py"
+            ],
+            "concepts": [
+                "add_messages",
+                "reducers",
+                "MessagesState",
+                "state management"
+            ],
+            "tags": null,
+            "evidence": null,
+            "queries": null
+        },
+        "final_answer": "## Retrieved facts\n\n`add_messages` is a message-aware reducer for graph state. It:\n\n- Appends new messages to the existing list.\n- Matches messages by ID and replaces an existing message when the incoming message has the same ID.\n- Converts supported message representations into LangChain `Message` objects, so state updates such as `{\"type\": \"human\", \"content\": \"message\"}` can be used and message attributes can be accessed with dot notation, such as `state[\"messages\"][-1].content`.\n- Supports optional `format=\"langchain-openai\"`, which formats messages for the documented OpenAI-compatible representation. The implementation requires `langchain-core>=0.3.11` for this option.\n- Supports message removal through `RemoveMessage`; a `RemoveMessage` with the `REMOVE_ALL_MESSAGES` ID clears the preceding messages, while deleting an unknown message ID raises `ValueError`.\n\nA custom reducer is a general function that combines the previous value with a state update. The documentation gives `operator.add` as an example for a list-valued field: `{\"bar\": [\"bye\"]}` is combined with the existing `{\"bar\": [\"hi\"]}` to produce `[\"hi\", \"bye\"]`. Without a reducer, a state update replaces the existing value.\n\n## When to use each\n\nUse `add_messages` when the state field represents chat or message history and you need message-specific behavior, especially ID-based updates, deserialization of message shorthand formats, or message deletion. A typical declaration is:\n\n```python\nfrom typing import Annotated\nfrom typing_extensions import TypedDict\nfrom langgraph.graph import add_messages\n\nclass State(TypedDict):\n    messages: Annotated[list, add_messages]\n```\n\nUse a custom reducer when the field contains non-message data or when you need aggregation semantics that `add_messages` does not provide. For example, `operator.add` is suitable for straightforward list concatenation where every update should be appended and no message IDs need to be interpreted.\n\nThe key distinction is that `operator.add` treats values generically, whereas `add_messages` interprets the values as messages and merges them according to message IDs. Therefore, using a generic append reducer for message history would append an updated message as a second entry rather than replacing the earlier message with the same ID; this conclusion follows from the documented behavior of `operator.add` and `add_messages`.",
+        "experiment_metadata": {
+            "version": "v7",
+            "timestamp": "2026-08-28T16:14:03.431997",
+            "embedding_model": "text-embedding-3-small",
+            "llm_provider": "openai",
+            "llm": "gpt-5.6-luna",
+            "chunk_size": 1200,
+            "chunk_overlap": 200,
+            "dense_top_k": 10,
+            "bm25_top_k": 10,
+            "hybrid_top_k": 16,
+            "rrf_k": 60,
+            "reranker_top_k": 13,
+            "reranker_name": "BAAI/bge-reranker-base",
+            "judge_model": "gemini-2.5-flash",
+            "judge_llm_provider": "google_genai",
+            "router_llm": "gpt-5.6-luna",
+            "router_llm_provider": "openai"
+        },
+        "router_metrics": {
+            "name": "Query Router",
+            "prompt_tokens": 1489,
+            "completion_tokens": 315,
+            "total_tokens": 1804,
+            "estimated_cost": 0.0006758,
+            "router_latency": 5.421194099995773
+        },
+        "pipeline_stages": [
+            {
+                "name": "Dense Retriever",
+                "latency": 2.3376770000031684,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "78c1e49a7ea7869ffd6542110b8605e26298fd4885a9a0d800b85ee7b2c0f2fd",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "aa3b6ae318c642fc4a30b1b0948a79001acee790641eedec4e9334bac3d34f0a",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3fd1366c63f4d438a27b077b16d80a77e81860a483b795d5e773c27ae6b397e3",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "380c663e5e3ef3a03e8087985fe8547a4c172b492b861d86b0b80df93905fb35",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0acf71163b5dca9a53c9503c7d6891378d807d25fd39db45d1f7d287655e2053",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2aa956a0efaef8cf795ac7d6c9c19e85c3ffe65cda3212906408d3af6c1ec0db",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8a00a2cce6dca90bbd904e50e336e494a7484fdab8fac0151618a8a73ba87867",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9d02aa5e6411235ca1ffaa2386337ca56efee43b34a220f49a63e981bfaa1b1b",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "e0e59df825f34ab5bea444a6320e82e47fde6aaa5cc549efc3e15ccaeeb793fb",
+                        "source": "add-memory.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1dbcc93fd558eb25b208d99cbd6a7093c25fd1cfa0ea6fb2ba72221538d00d33",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.015050100002554245,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "7a13f27bb7e3d17e3a4ea80e636a78b6e682d2f98d6923b1412964216349c729",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1dbcc93fd558eb25b208d99cbd6a7093c25fd1cfa0ea6fb2ba72221538d00d33",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "05ada364f15c3c043d0777e3e2136792e33b086368fa61fbca564a2960ad5e6a",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0acf71163b5dca9a53c9503c7d6891378d807d25fd39db45d1f7d287655e2053",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "e5a015a09de2e69379b636a5eb6c80928975cbb5041cbce4a8ddab62d754400a",
+                        "source": "frontend/custom-stream-channels.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "91d8cb1edfbd119c2bb53d65f4f9da40e9d169aabcd277c2c873c202caf74a69",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0afd896443e286b7b6b480a4c6be57f85819a3efd40775597253ce04a03685b1",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7243bbb502521937ab394fa6115a4ede51fb8b17adbaa14df11ecffc20c7f016",
+                        "source": "stores.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "edea3ed95318da10fca89a95d549d05cadddc044e835d06213e911fb92d0f580",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1e2e7b2f178e481e58e678d3ea73ba33a03d14cd34957eb472266fddf42dd43b",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 7.46000005165115e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "0acf71163b5dca9a53c9503c7d6891378d807d25fd39db45d1f7d287655e2053",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.031009615384615385,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "1dbcc93fd558eb25b208d99cbd6a7093c25fd1cfa0ea6fb2ba72221538d00d33",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.0304147465437788,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "78c1e49a7ea7869ffd6542110b8605e26298fd4885a9a0d800b85ee7b2c0f2fd",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "7a13f27bb7e3d17e3a4ea80e636a78b6e682d2f98d6923b1412964216349c729",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "aa3b6ae318c642fc4a30b1b0948a79001acee790641eedec4e9334bac3d34f0a",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "3fd1366c63f4d438a27b077b16d80a77e81860a483b795d5e773c27ae6b397e3",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "05ada364f15c3c043d0777e3e2136792e33b086368fa61fbca564a2960ad5e6a",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "380c663e5e3ef3a03e8087985fe8547a4c172b492b861d86b0b80df93905fb35",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "e5a015a09de2e69379b636a5eb6c80928975cbb5041cbce4a8ddab62d754400a",
+                        "source": "frontend/custom-stream-channels.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "2aa956a0efaef8cf795ac7d6c9c19e85c3ffe65cda3212906408d3af6c1ec0db",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "91d8cb1edfbd119c2bb53d65f4f9da40e9d169aabcd277c2c873c202caf74a69",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "8a00a2cce6dca90bbd904e50e336e494a7484fdab8fac0151618a8a73ba87867",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 12.399105599994073,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "f273a0bcdcf7e54a09a18112e7a22e21107db317b485adbbba32087e7977b6e4",
+                        "source": "langgraph/langgraph/graph/message.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.5831791758537292,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "0acf71163b5dca9a53c9503c7d6891378d807d25fd39db45d1f7d287655e2053",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.48918887972831726,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "78c1e49a7ea7869ffd6542110b8605e26298fd4885a9a0d800b85ee7b2c0f2fd",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.23564068973064423,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "380c663e5e3ef3a03e8087985fe8547a4c172b492b861d86b0b80df93905fb35",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.22278185188770294,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "aa3b6ae318c642fc4a30b1b0948a79001acee790641eedec4e9334bac3d34f0a",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.19881151616573334,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "1dbcc93fd558eb25b208d99cbd6a7093c25fd1cfa0ea6fb2ba72221538d00d33",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.19747579097747803,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "3fd1366c63f4d438a27b077b16d80a77e81860a483b795d5e773c27ae6b397e3",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.10402913391590118,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "7a13f27bb7e3d17e3a4ea80e636a78b6e682d2f98d6923b1412964216349c729",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.005015428643673658,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "2aa956a0efaef8cf795ac7d6c9c19e85c3ffe65cda3212906408d3af6c1ec0db",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.004916999023407698,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "05ada364f15c3c043d0777e3e2136792e33b086368fa61fbca564a2960ad5e6a",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.002391645684838295,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "8a00a2cce6dca90bbd904e50e336e494a7484fdab8fac0151618a8a73ba87867",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.0023799207992851734,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "e5a015a09de2e69379b636a5eb6c80928975cbb5041cbce4a8ddab62d754400a",
+                        "source": "frontend/custom-stream-channels.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.0002477900416124612,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "91d8cb1edfbd119c2bb53d65f4f9da40e9d169aabcd277c2c873c202caf74a69",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.0001384389033773914,
+                        "rank": 13
+                    }
+                ]
+            }
+        ],
+        "generation_metrics": [
+            {
+                "name": "Initial Generation",
+                "answer": "## Retrieved facts\n\n`add_messages` is a message-aware reducer for graph state. It:\n\n- Appends new messages to the existing list.\n- Matches messages by ID and replaces an existing message when the incoming message has the same ID.\n- Converts supported message representations into LangChain `Message` objects, so state updates such as `{\"type\": \"human\", \"content\": \"message\"}` can be used and message attributes can be accessed with dot notation, such as `state[\"messages\"][-1].content`.\n- Supports optional `format=\"langchain-openai\"`, which formats messages for the documented OpenAI-compatible representation. The implementation requires `langchain-core>=0.3.11` for this option.\n- Supports message removal through `RemoveMessage`; a `RemoveMessage` with the `REMOVE_ALL_MESSAGES` ID clears the preceding messages, while deleting an unknown message ID raises `ValueError`.\n\nA custom reducer is a general function that combines the previous value with a state update. The documentation gives `operator.add` as an example for a list-valued field: `{\"bar\": [\"bye\"]}` is combined with the existing `{\"bar\": [\"hi\"]}` to produce `[\"hi\", \"bye\"]`. Without a reducer, a state update replaces the existing value.\n\n## When to use each\n\nUse `add_messages` when the state field represents chat or message history and you need message-specific behavior, especially ID-based updates, deserialization of message shorthand formats, or message deletion. A typical declaration is:\n\n```python\nfrom typing import Annotated\nfrom typing_extensions import TypedDict\nfrom langgraph.graph import add_messages\n\nclass State(TypedDict):\n    messages: Annotated[list, add_messages]\n```\n\nUse a custom reducer when the field contains non-message data or when you need aggregation semantics that `add_messages` does not provide. For example, `operator.add` is suitable for straightforward list concatenation where every update should be appended and no message IDs need to be interpreted.\n\nThe key distinction is that `operator.add` treats values generically, whereas `add_messages` interprets the values as messages and merges them according to message IDs. Therefore, using a generic append reducer for message history would append an updated message as a second entry rather than replacing the earlier message with the same ID; this conclusion follows from the documented behavior of `operator.add` and `add_messages`.",
+                "answer_length": 2390,
+                "prompt_tokens": 6090,
+                "completion_tokens": 609,
+                "total_tokens": 6699,
+                "estimated_cost": 0.0019488,
+                "generation_latency": 6.918736800005718,
+                "is_complete": true,
+                "round_number": null,
+                "gaps_detected": []
+            }
+        ],
+        "judge_evaluation": {
+            "correctness": {
+                "score": 5.0,
+                "justification": "The answer accurately describes the functionality of `add_messages` and custom reducers, correctly identifying their differences and appropriate use cases based on the provided context."
+            },
+            "groundedness": {
+                "score": 5.0,
+                "justification": "All significant technical claims in the answer are directly supported by the retrieved context. The inferences made are logical and consistent with the documented behavior."
+            },
+            "completeness": {
+                "score": 5.0,
+                "justification": "The answer thoroughly addresses all important aspects of the user's question, explaining the differences between `add_messages` and custom reducers, and providing clear guidance on when to use each, supported by relevant details from the context."
+            },
+            "hallucination": {
+                "score": 0.0,
+                "justification": "The answer contains no unsupported or fabricated technical claims."
+            },
+            "missing_concepts": [],
+            "unsupported_claims": []
+        },
+        "overall_metrics": {
+            "total_latency": 27.22056230000453,
+            "total_cost": 0.012894899999999999,
+            "recall_at_k": 0.5,
+            "precision_at_k": 0.75,
+            "hit_rate": 1.0,
+            "mrr": 1.0
+        }
+    }
+]

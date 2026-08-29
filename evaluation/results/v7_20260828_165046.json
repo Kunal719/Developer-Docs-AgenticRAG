@@ -1,0 +1,1486 @@
+[
+    {
+        "question": {
+            "question": "Design a LangGraph workflow that processes hundreds of documents in parallel and safely merges extracted information into shared state. Explain how you would prevent state conflicts.",
+            "code_snippet": null,
+            "error": null,
+            "logs": null,
+            "observed_behavior": null,
+            "expected_behavior": null,
+            "id": 44,
+            "category": "architecture",
+            "intent": "parallel_processing",
+            "difficulty": "hard",
+            "expected_files": [
+                "graph-api.mdx",
+                "use-graph-api.mdx",
+                "pregel.mdx",
+                "errors/INVALID_CONCURRENT_GRAPH_UPDATE.mdx",
+                "langgraph/langgraph/types.py",
+                "langgraph/langgraph/graph/state.py"
+            ],
+            "concepts": [
+                "parallel execution",
+                "Send",
+                "reducers",
+                "state management",
+                "workflow design"
+            ],
+            "tags": null,
+            "evidence": null,
+            "queries": null
+        },
+        "final_answer": "Use a fan-out/fan-in graph: have an orchestrator create one dynamic worker for each document, let each worker extract information, and merge worker results into a reducer-backed state key.\n\n```python\nimport operator\nfrom typing import Annotated\nfrom typing_extensions import TypedDict\nfrom langgraph.types import Send\n\nclass State(TypedDict):\n    documents: list\n    extracted: Annotated[list, operator.add]\n    final_result: dict\n\nclass WorkerState(TypedDict):\n    document: object\n    extracted: Annotated[list, operator.add]\n\ndef orchestrator(state: State):\n    # Return one Send for each document.\n    return [Send(\"extract\", {\"document\": document})\n            for document in state[\"documents\"]]\n\ndef extract(state: WorkerState):\n    information = extract_information(state[\"document\"])\n    return {\"extracted\": [information]}\n\ndef combine(state: State):\n    return {\"final_result\": merge_extracted_information(state[\"extracted\"])}\n```\n\nThe important design choice is `extracted: Annotated[list, operator.add]`. The graph documentation states that parallel branches may update the same state key, and a reducer combines those updates instead of allowing conflicting writes. For lists, the `operator.add` reducer concatenates the worker lists. Without a suitable reducer, concurrent writes to the same key can produce an `INVALID_CONCURRENT_GRAPH_UPDATE` error.\n\n`Send` is the documented mechanism for dynamic orchestrator-worker workflows. Each worker receives its own input/state, and worker outputs are written to a shared state key that the orchestrator can later use for synthesis. Therefore, the extraction result should be returned as a one-item list and accumulated in `extracted`, rather than having every worker overwrite one shared scalar value.\n\nThe graph should then fan in to `combine` after all worker branches complete. In the documented fan-out/fan-in model, nodes reached through parallel branches execute in the same superstep, and a downstream node executes after those parallel nodes finish. If a worker has multiple processing steps, the graph API also supports deferring a node until pending tasks are complete, which is useful for branches of different lengths.\n\nAdditional safety and execution considerations:\n\n- Parallel updates are not guaranteed to arrive in a consistent order. If the order of extracted records matters, include an ordering value—such as the document index—in each result and sort or otherwise order the results during combination. Do not depend on reducer arrival order.\n- A parallel superstep is transactional: if one branch raises an exception, none of that superstep's updates are applied. With a checkpointer, results from successful nodes in the superstep are saved and do not repeat when the workflow is resumed.\n- For transient failures, configure a retry policy or catch exceptions inside the worker. The documentation states that only failing branches are retried, so successful parallel work does not need to be redundantly repeated.\n- Since the workload contains hundreds of documents, set `max_concurrency` in the invocation configuration to bound the number of concurrent tasks, for example:\n\n```python\ngraph.invoke(\n    {\"documents\": documents},\n    {\"configurable\": {\"max_concurrency\": 10}},\n)\n```\n\nThis limits concurrency; the retrieved context does not specify an appropriate numeric limit for a particular document workload. The functional API is also documented as an alternative: create one task per document, invoke the tasks concurrently, wait for their results, and then merge the returned results. The graph API is preferable when the workflow itself benefits from explicit fan-out, fan-in, reducers, checkpointing, and graph-level control.",
+        "experiment_metadata": {
+            "version": "v7",
+            "timestamp": "2026-08-28T16:50:46.118029",
+            "embedding_model": "text-embedding-3-small",
+            "llm_provider": "openai",
+            "llm": "gpt-5.6-luna",
+            "chunk_size": 1200,
+            "chunk_overlap": 200,
+            "dense_top_k": 10,
+            "bm25_top_k": 10,
+            "hybrid_top_k": 16,
+            "rrf_k": 60,
+            "reranker_top_k": 13,
+            "reranker_name": "BAAI/bge-reranker-base",
+            "judge_model": "gemini-2.5-flash",
+            "judge_llm_provider": "google_genai",
+            "router_llm": "gpt-5.6-luna",
+            "router_llm_provider": "openai"
+        },
+        "router_metrics": {
+            "name": "Query Router",
+            "prompt_tokens": 1500,
+            "completion_tokens": 326,
+            "total_tokens": 1826,
+            "estimated_cost": 0.0006912,
+            "router_latency": 4.776876300005824
+        },
+        "retrieval_plan": {
+            "retrieval_mode": "combined_query",
+            "reasoning": "The question combines parallel document fan-out, shared-state updates, and conflict-safe merge semantics. These are closely related LangGraph concepts best retrieved together so evidence about workflow design and reducers remains connected.",
+            "sub_queries": [
+                "how to fan out document processing across parallel LangGraph tasks",
+                "how do LangGraph state reducers merge concurrent updates from parallel nodes",
+                "how should shared state be structured to avoid conflicts when processing many documents",
+                "how does the Send API support dynamic parallel document processing in LangGraph"
+            ],
+            "combined_query": "Design a LangGraph workflow that processes hundreds of documents in parallel and safely merges extracted information into shared state. Explain how to prevent state conflicts, including parallel fan-out, Send API or dynamic task dispatch, state schema design, reducers for concurrent updates, and conflict-safe aggregation of extracted document results.",
+            "metadata_filters": {
+                "corpus": null,
+                "module_names": null,
+                "class_names": null,
+                "function_names": null,
+                "category": null
+            }
+        },
+        "pipeline_stages": [
+            {
+                "name": "Dense Retriever",
+                "latency": 1.3891394000020227,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "e3afe22adb0d125099292936116578ba10cd39ed30ce1afd2a557e256c5cb3d6",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "84108f875e6de5194567ccc8f354d79e24ba30034d1d7f311be7076f16a13b26",
+                        "source": "choosing-apis.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c6662da86d767b4ffce67d45301dff4b45b8fad95d57d920953eaa0686b67d77",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2868765c5d0fd1baaa86a34853efa4fe85299594d1c8e1b0aaa0b0026d0918f8",
+                        "source": "errors/MISSING_CHECKPOINTER.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "94073545d26c5822a7648b7b6b3825702fe0324543b689deeace68ebfadf2d61",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8b6a88000398431610ba73914e76208c6c836a2fd8e02cdc608c64f67e99ee9b",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "52ccc3cf1987ff4f1af6b1330cc757fee3124a461785fd1b96a93ba5243cf2d6",
+                        "source": "choosing-apis.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6d0997c9742952b28a3434b65fd2e66662988c9712baf69aae23f008addb0033",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3617b8ede99f969dd6e916b4d7bb5f8069582c6e336ff2855af765ef156ba008",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d20ed8ca3636c2b3b4607832e8bac29bc67e0b4f207de34e450ec3f122d95c24",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.014464799998677336,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "c32e2bf3b819b3ddfa736d32ae78cc7d3b3965773eeb2aca68f877f0bce2b693",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b61344722a90b589bb1d33e9ac38ed3de0d24fd5b686f457bfdf390531684613",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9bbd0a4a009fd3bd592ac83a9ad83c7ba3c53daa9588a7b5b9e28c2be58bbd62",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9ce45afc30bb79c522e48c8bf92d286d2976608a7fbcfd0680647b0d34b11143",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a8be5f9022fe311529bd4e2581b1b8b1167c23d9cb2a0a329555a681d19ae15e",
+                        "source": "persistence.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "fda660f1fd372b7c16bebb0e6c8440f81b3c0104719afe39992749d596988957",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "07147e3645433b1539f70824af7b19410acef2e1da98726a502c9545f7ae71b6",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "af87ec1e2ae1952b234c8874ce4378297bd2b943ee67943faf9d7f07f9edf811",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a115ec061e3a608db0310206d250a0693243e84395b60388f5bf68ae86187164",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "edea3ed95318da10fca89a95d549d05cadddc044e835d06213e911fb92d0f580",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 5.2400006097741425e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "e3afe22adb0d125099292936116578ba10cd39ed30ce1afd2a557e256c5cb3d6",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "c32e2bf3b819b3ddfa736d32ae78cc7d3b3965773eeb2aca68f877f0bce2b693",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "84108f875e6de5194567ccc8f354d79e24ba30034d1d7f311be7076f16a13b26",
+                        "source": "choosing-apis.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "b61344722a90b589bb1d33e9ac38ed3de0d24fd5b686f457bfdf390531684613",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "c6662da86d767b4ffce67d45301dff4b45b8fad95d57d920953eaa0686b67d77",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "9bbd0a4a009fd3bd592ac83a9ad83c7ba3c53daa9588a7b5b9e28c2be58bbd62",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "2868765c5d0fd1baaa86a34853efa4fe85299594d1c8e1b0aaa0b0026d0918f8",
+                        "source": "errors/MISSING_CHECKPOINTER.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "9ce45afc30bb79c522e48c8bf92d286d2976608a7fbcfd0680647b0d34b11143",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "94073545d26c5822a7648b7b6b3825702fe0324543b689deeace68ebfadf2d61",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "a8be5f9022fe311529bd4e2581b1b8b1167c23d9cb2a0a329555a681d19ae15e",
+                        "source": "persistence.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "8b6a88000398431610ba73914e76208c6c836a2fd8e02cdc608c64f67e99ee9b",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "fda660f1fd372b7c16bebb0e6c8440f81b3c0104719afe39992749d596988957",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 1.9337841000015032,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "aeb922a79457148a0b84f11d26cb57b99bca094ea0e11d2d6d134b99084d5808",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "edb712c9e7d8b68fb807989213f6d91162665c00c029307cdd5613d9d4eb6c6a",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8c94835732219bb2e35383de2cdb734405129450c5147adae32b8472617062c1",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ddb0122d377aba69be6dc937f47ed851e8f6343c24edf76a5638ed5bb4857bb7",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2edba26715b5b99d37ea58623d5897a3851df706356eb9273a2b46e784265e14",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6976d30ccd2164e8fc86c3ca2a411f01bf67574c666ff37254500d96af755d11",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d533f612a0eaa60d7587d6154d67b4d30b409af8fbb2ffbf4c46f3461cd6ad25",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2ac90f8f5636d93caa3f28078270593b28349ae3c651e93dd4b640780c9710b6",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1753e2c35cc0df8150262b02368ab64d3e8b342a26a2591eaed6705708f00c33",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "38185ed2094975b242beb756ddb2596b7b7579921557173a8dab38365c4d712f",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.015612099996360485,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "b1c72864853fae07e0f43ccfd9038724c66d1f7f2c6df824dc768a52b601d320",
+                        "source": "prebuilt/langgraph/prebuilt/chat_agent_executor.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d1c18673fcc0d66a010f355e0a36daea325a63f19d9f2c4f558f2461efdb96c1",
+                        "source": "prebuilt/langgraph/prebuilt/chat_agent_executor.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "012bc5cd9e94c3e973fac157521ca1b05333bcc37ec918ad0b1ab6875c7257e8",
+                        "source": "langgraph/langgraph/channels/binop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c71e87efe1898830ade954a441b8bbade9a7dab625b59104d376606d64f0d2c9",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "41ef7e687f1b62ab81e492e01cd85b54ab0c489a5a7ea5451c607d5d69844cc3",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "e6b6b973910b575a3c160c033f4f98f3584e6767dc3e27066d00f0d77bcb30dc",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "521c96d0284a6fdd57f19c2a768842a65d6a3930cd9ddbe826cb4d4b2cbcd4eb",
+                        "source": "langgraph/langgraph/func/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "abb503619c18c9bedd96329a53a15214b3051f73d3817c4ab46a6f764c42c263",
+                        "source": "checkpoint/langgraph/store/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f445813aef9b47b07431444d9f0dc8d01491fbc60c09bc8e6826991a78d73617",
+                        "source": "checkpoint/langgraph/store/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 6.460000440711156e-05,
+                "top_k": 16,
+                "documents": [
+                    {
+                        "chunk_id": "aeb922a79457148a0b84f11d26cb57b99bca094ea0e11d2d6d134b99084d5808",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "b1c72864853fae07e0f43ccfd9038724c66d1f7f2c6df824dc768a52b601d320",
+                        "source": "prebuilt/langgraph/prebuilt/chat_agent_executor.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "edb712c9e7d8b68fb807989213f6d91162665c00c029307cdd5613d9d4eb6c6a",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "d1c18673fcc0d66a010f355e0a36daea325a63f19d9f2c4f558f2461efdb96c1",
+                        "source": "prebuilt/langgraph/prebuilt/chat_agent_executor.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "8c94835732219bb2e35383de2cdb734405129450c5147adae32b8472617062c1",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "012bc5cd9e94c3e973fac157521ca1b05333bcc37ec918ad0b1ab6875c7257e8",
+                        "source": "langgraph/langgraph/channels/binop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "ddb0122d377aba69be6dc937f47ed851e8f6343c24edf76a5638ed5bb4857bb7",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "c71e87efe1898830ade954a441b8bbade9a7dab625b59104d376606d64f0d2c9",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "2edba26715b5b99d37ea58623d5897a3851df706356eb9273a2b46e784265e14",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "6976d30ccd2164e8fc86c3ca2a411f01bf67574c666ff37254500d96af755d11",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "41ef7e687f1b62ab81e492e01cd85b54ab0c489a5a7ea5451c607d5d69844cc3",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "d533f612a0eaa60d7587d6154d67b4d30b409af8fbb2ffbf4c46f3461cd6ad25",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 13
+                    },
+                    {
+                        "chunk_id": "e6b6b973910b575a3c160c033f4f98f3584e6767dc3e27066d00f0d77bcb30dc",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 14
+                    },
+                    {
+                        "chunk_id": "2ac90f8f5636d93caa3f28078270593b28349ae3c651e93dd4b640780c9710b6",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 15
+                    },
+                    {
+                        "chunk_id": "521c96d0284a6fdd57f19c2a768842a65d6a3930cd9ddbe826cb4d4b2cbcd4eb",
+                        "source": "langgraph/langgraph/func/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 16
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 26.02168740000343,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "c6662da86d767b4ffce67d45301dff4b45b8fad95d57d920953eaa0686b67d77",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.5202034711837769,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "c32e2bf3b819b3ddfa736d32ae78cc7d3b3965773eeb2aca68f877f0bce2b693",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.4903174638748169,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "edb712c9e7d8b68fb807989213f6d91162665c00c029307cdd5613d9d4eb6c6a",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.4268396496772766,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "e3afe22adb0d125099292936116578ba10cd39ed30ce1afd2a557e256c5cb3d6",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.4125325679779053,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "d533f612a0eaa60d7587d6154d67b4d30b409af8fbb2ffbf4c46f3461cd6ad25",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.37018388509750366,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "c71e87efe1898830ade954a441b8bbade9a7dab625b59104d376606d64f0d2c9",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.27007901668548584,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.24093343317508698,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "2868765c5d0fd1baaa86a34853efa4fe85299594d1c8e1b0aaa0b0026d0918f8",
+                        "source": "errors/MISSING_CHECKPOINTER.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.23704233765602112,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "aeb922a79457148a0b84f11d26cb57b99bca094ea0e11d2d6d134b99084d5808",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.20099350810050964,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "9bbd0a4a009fd3bd592ac83a9ad83c7ba3c53daa9588a7b5b9e28c2be58bbd62",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.17901180684566498,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "41ef7e687f1b62ab81e492e01cd85b54ab0c489a5a7ea5451c607d5d69844cc3",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.16874076426029205,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "8c94835732219bb2e35383de2cdb734405129450c5147adae32b8472617062c1",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.15804140269756317,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "ddb0122d377aba69be6dc937f47ed851e8f6343c24edf76a5638ed5bb4857bb7",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.13307994604110718,
+                        "rank": 13
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 1.7692858000009437,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "c6662da86d767b4ffce67d45301dff4b45b8fad95d57d920953eaa0686b67d77",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9fc9a13b78239e1e6ce1e5babca4e55019911b3870cb05a4ad26eea6d6f9cffe",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d4046c29ad6bc3097641ef81d8736d188b9d1bec7eee1d1c3af5f9e1ea184c51",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b99b3cbe5ede35289b6b9fea533aa70b0bfb03b236444226da495fd5bce8e964",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a9f97a492d01c42dfd995c96f093c1ed214e8291e79ea91ad8c6d8ca6735d5c7",
+                        "source": "errors/INVALID_CONCURRENT_GRAPH_UPDATE.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "30c04cc6f353cb1cab750fe6729377ff455f873583ac55eae39507e36e28dcea",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "aa3b6ae318c642fc4a30b1b0948a79001acee790641eedec4e9334bac3d34f0a",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4bc66ee907ec376fa44c7e3e8dd4036535ec217f18700e2978a8e8feca29d47d",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d20ed8ca3636c2b3b4607832e8bac29bc67e0b4f207de34e450ec3f122d95c24",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8b6a88000398431610ba73914e76208c6c836a2fd8e02cdc608c64f67e99ee9b",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.004269800003385171,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "c32e2bf3b819b3ddfa736d32ae78cc7d3b3965773eeb2aca68f877f0bce2b693",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c6662da86d767b4ffce67d45301dff4b45b8fad95d57d920953eaa0686b67d77",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9fc9a13b78239e1e6ce1e5babca4e55019911b3870cb05a4ad26eea6d6f9cffe",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "52ccc3cf1987ff4f1af6b1330cc757fee3124a461785fd1b96a93ba5243cf2d6",
+                        "source": "choosing-apis.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "34c23f88620dfda257f948c9ce0d340b1857c16da5e191006180e08942fed45f",
+                        "source": "stores.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b7e09e46c181f234cd4100b1298947ae54d2a0d43d0ad55d7aa2c266067a32b2",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a9f97a492d01c42dfd995c96f093c1ed214e8291e79ea91ad8c6d8ca6735d5c7",
+                        "source": "errors/INVALID_CONCURRENT_GRAPH_UPDATE.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9ab7624f3d8f6a3dfd4463b002f8811084ccea337a268c954146c761e6c8bcdf",
+                        "source": "event-streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "54448c7ef29d7473d5f90fe0c8e9303e4a97711b4aa93e0bf6816218aa2578a5",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "30c04cc6f353cb1cab750fe6729377ff455f873583ac55eae39507e36e28dcea",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 3.930000093532726e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "c6662da86d767b4ffce67d45301dff4b45b8fad95d57d920953eaa0686b67d77",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.03252247488101534,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "9fc9a13b78239e1e6ce1e5babca4e55019911b3870cb05a4ad26eea6d6f9cffe",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.03200204813108039,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "a9f97a492d01c42dfd995c96f093c1ed214e8291e79ea91ad8c6d8ca6735d5c7",
+                        "source": "errors/INVALID_CONCURRENT_GRAPH_UPDATE.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.030309988518943745,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "30c04cc6f353cb1cab750fe6729377ff455f873583ac55eae39507e36e28dcea",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.029437229437229435,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "c32e2bf3b819b3ddfa736d32ae78cc7d3b3965773eeb2aca68f877f0bce2b693",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "d4046c29ad6bc3097641ef81d8736d188b9d1bec7eee1d1c3af5f9e1ea184c51",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "b99b3cbe5ede35289b6b9fea533aa70b0bfb03b236444226da495fd5bce8e964",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "52ccc3cf1987ff4f1af6b1330cc757fee3124a461785fd1b96a93ba5243cf2d6",
+                        "source": "choosing-apis.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "34c23f88620dfda257f948c9ce0d340b1857c16da5e191006180e08942fed45f",
+                        "source": "stores.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "b7e09e46c181f234cd4100b1298947ae54d2a0d43d0ad55d7aa2c266067a32b2",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "aa3b6ae318c642fc4a30b1b0948a79001acee790641eedec4e9334bac3d34f0a",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "4bc66ee907ec376fa44c7e3e8dd4036535ec217f18700e2978a8e8feca29d47d",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 11.549250399999437,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "c6662da86d767b4ffce67d45301dff4b45b8fad95d57d920953eaa0686b67d77",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.8319286108016968,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "9fc9a13b78239e1e6ce1e5babca4e55019911b3870cb05a4ad26eea6d6f9cffe",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.6124593019485474,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "a9f97a492d01c42dfd995c96f093c1ed214e8291e79ea91ad8c6d8ca6735d5c7",
+                        "source": "errors/INVALID_CONCURRENT_GRAPH_UPDATE.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.5588680505752563,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "c32e2bf3b819b3ddfa736d32ae78cc7d3b3965773eeb2aca68f877f0bce2b693",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.5324894785881042,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "d4046c29ad6bc3097641ef81d8736d188b9d1bec7eee1d1c3af5f9e1ea184c51",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.4395442605018616,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 1.6207194000016898,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "c6662da86d767b4ffce67d45301dff4b45b8fad95d57d920953eaa0686b67d77",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "935271b9ab1c8cc2edadf35a6ee55d17be4877791c9d1bacc0c656ca23c255a5",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9ce45afc30bb79c522e48c8bf92d286d2976608a7fbcfd0680647b0d34b11143",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5dd5a93022e7709b04eed3d373e840357254ba03b5d57fcc6510f2e64ab6b85e",
+                        "source": "errors/GRAPH_RECURSION_LIMIT.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "84108f875e6de5194567ccc8f354d79e24ba30034d1d7f311be7076f16a13b26",
+                        "source": "choosing-apis.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "15922c635dc908626b79c1c07eb40fde5a6f7b77b53543748fd4d5e8248930b3",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d20ed8ca3636c2b3b4607832e8bac29bc67e0b4f207de34e450ec3f122d95c24",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a512a4a144e7b24191e06c5630437dad9ef8fbbedbbd3e4bc9bb991722a31705",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "427bf2ae11dcc9b3735cd1a5ab9f094c58befe60af3e48dc49724728533acc79",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9fc9a13b78239e1e6ce1e5babca4e55019911b3870cb05a4ad26eea6d6f9cffe",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.005343799995898735,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "c32e2bf3b819b3ddfa736d32ae78cc7d3b3965773eeb2aca68f877f0bce2b693",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c6662da86d767b4ffce67d45301dff4b45b8fad95d57d920953eaa0686b67d77",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b7e09e46c181f234cd4100b1298947ae54d2a0d43d0ad55d7aa2c266067a32b2",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "fbbafaafe529a5ceb9c9dd5fb930ccf1458d018ad0f8b1c76eb27a18e6d04537",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "888ea7ddf96b00318384425f991baccb41ebdf62380c76c7dcd53c0a361b0b7e",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a512a4a144e7b24191e06c5630437dad9ef8fbbedbbd3e4bc9bb991722a31705",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f7aaeb48342d9201a2899b205f5a7ae26176e05c0bf5113f6dbbd9b0ff3610d8",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "e9efa7b0ebda592e330c1b6acf13fee883be8835a9b8971a1f88b98370ead290",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9ddbf428726b86bb3e8ad512695cb2ca3be884c309fae91e4cf58a97f5669fb6",
+                        "source": "agentic-rag.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "e9a74f9f23524d99d779cef2498a6eb1cd460a2213820583b401c45edafaea79",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.27999984822236e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "c6662da86d767b4ffce67d45301dff4b45b8fad95d57d920953eaa0686b67d77",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.03252247488101534,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "a512a4a144e7b24191e06c5630437dad9ef8fbbedbbd3e4bc9bb991722a31705",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.029857397504456328,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "c32e2bf3b819b3ddfa736d32ae78cc7d3b3965773eeb2aca68f877f0bce2b693",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "935271b9ab1c8cc2edadf35a6ee55d17be4877791c9d1bacc0c656ca23c255a5",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "9ce45afc30bb79c522e48c8bf92d286d2976608a7fbcfd0680647b0d34b11143",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "b7e09e46c181f234cd4100b1298947ae54d2a0d43d0ad55d7aa2c266067a32b2",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "5dd5a93022e7709b04eed3d373e840357254ba03b5d57fcc6510f2e64ab6b85e",
+                        "source": "errors/GRAPH_RECURSION_LIMIT.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "fbbafaafe529a5ceb9c9dd5fb930ccf1458d018ad0f8b1c76eb27a18e6d04537",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "84108f875e6de5194567ccc8f354d79e24ba30034d1d7f311be7076f16a13b26",
+                        "source": "choosing-apis.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "888ea7ddf96b00318384425f991baccb41ebdf62380c76c7dcd53c0a361b0b7e",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "15922c635dc908626b79c1c07eb40fde5a6f7b77b53543748fd4d5e8248930b3",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "d20ed8ca3636c2b3b4607832e8bac29bc67e0b4f207de34e450ec3f122d95c24",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 9.81838649999554,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "c32e2bf3b819b3ddfa736d32ae78cc7d3b3965773eeb2aca68f877f0bce2b693",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.10568667203187943,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "c6662da86d767b4ffce67d45301dff4b45b8fad95d57d920953eaa0686b67d77",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.039010897278785706,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "84108f875e6de5194567ccc8f354d79e24ba30034d1d7f311be7076f16a13b26",
+                        "source": "choosing-apis.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.02289140224456787,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "fbbafaafe529a5ceb9c9dd5fb930ccf1458d018ad0f8b1c76eb27a18e6d04537",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.019375327974557877,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "a512a4a144e7b24191e06c5630437dad9ef8fbbedbbd3e4bc9bb991722a31705",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.01694563403725624,
+                        "rank": 5
+                    }
+                ]
+            }
+        ],
+        "generation_metrics": [
+            {
+                "name": "Initial Generation",
+                "answer": "## Retrieved facts\n\n- LangGraph supports dynamic orchestrator-worker workflows through `Send`. A `Send` specifies a target node and the argument that should be sent to it.\n- Each worker has its own state, while worker outputs can be written to a shared state key that the orchestrator reads after the workers complete.\n- LangGraph supports fan-out/fan-in parallel execution. State reducers determine how updates to a state key are combined instead of simply overwritten.\n- For a list state key, the documented `operator.add` reducer concatenates worker-produced lists.\n- The functional API also supports concurrent task execution by creating tasks and collecting their results.\n\n## Design\n\nUse an orchestrator-worker graph:\n\n1. The orchestrator receives the document list.\n2. It creates one `Send` payload per document, targeting an extraction worker.\n3. Workers independently extract information from their assigned document.\n4. Every worker writes its result to a shared list key such as `extracted_items`.\n5. A reducer combines those list updates, and a final node consumes the merged results.\n\nA representative state shape is:\n\n```python\nimport operator\nfrom typing import Annotated\nfrom typing_extensions import TypedDict\nfrom langgraph.types import Send\n\n\nclass State(TypedDict):\n    documents: list\n    extracted_items: Annotated[list, operator.add]\n    final_output: str\n\n\nclass WorkerState(TypedDict):\n    document: object\n    extracted_items: Annotated[list, operator.add]\n```\n\nThe orchestrator can return dynamically created worker sends conceptually as follows:\n\n```python\ndef orchestrator(state: State):\n    return [\n        Send(\"extract_document\", {\"document\": document})\n        for document in state[\"documents\"]\n    ]\n```\n\nThe worker should return a list containing its result rather than replacing the shared list:\n\n```python\ndef extract_document(state: WorkerState):\n    result = extract_information(state[\"document\"])\n    return {\"extracted_items\": [result]}\n```\n\nAfter fan-in, the final node can read `state[\"extracted_items\"]` and synthesize or persist the combined information.\n\n## Preventing state conflicts\n\n1. **Use a reducer on the shared collection.** Declare `extracted_items` with `Annotated[list, operator.add]`. According to the documentation, this combines list updates by concatenating them; without a reducer, updates would otherwise overwrite one another.\n\n2. **Have workers return independent items.** Each worker should return a one-element list, or its own result list, instead of returning a complete replacement for the shared collection. This makes the intended merge operation explicit.\n\n3. **Keep per-document input in worker state.** `Send` passes each worker its specific document, and the documentation states that workers have their own state. Therefore, workers do not need to mutate a shared input object while extracting data.\n\n4. **Merge only at the reducer-controlled state key.** The worker should write its result to `extracted_items`; other shared keys should be written only when they have a defined merge policy. For example, a scalar summary should generally be produced by the post-fan-in node rather than independently overwritten by every worker. This last point is an inference from the documented overwrite-versus-reducer behavior.\n\n5. **Use fan-in before synthesis.** The final synthesis node should run after the worker outputs have been combined. The documented fan-out/fan-in pattern is designed to accumulate worker updates into state before the downstream node processes them.\n\nFor a workflow implemented with the functional API instead, the documented equivalent is to create one `@task` invocation per document and collect the results after invoking the tasks concurrently. In that design, the returned results are merged explicitly by the orchestrator, rather than by a graph-state reducer.\n\nThe retrieved context establishes the reducer-based list merge and the worker-isolated `Send` pattern. It does not specify ordering guarantees for results from parallel workers, deduplication behavior, or a limit on the number of documents that can be processed in one fan-out.",
+                "answer_length": 4143,
+                "prompt_tokens": 13200,
+                "completion_tokens": 1325,
+                "total_tokens": 14525,
+                "estimated_cost": 0.00423,
+                "generation_latency": 12.507682600000408,
+                "is_complete": false,
+                "round_number": null,
+                "gaps_detected": [
+                    "Parallel worker result ordering and deduplication",
+                    "Maximum supported fan-out size or batching guidance"
+                ]
+            },
+            {
+                "name": "Gap Generation Round 1",
+                "answer": "Use a fan-out/fan-in graph: have an orchestrator create one dynamic worker for each document, let each worker extract information, and merge worker results into a reducer-backed state key.\n\n```python\nimport operator\nfrom typing import Annotated\nfrom typing_extensions import TypedDict\nfrom langgraph.types import Send\n\nclass State(TypedDict):\n    documents: list\n    extracted: Annotated[list, operator.add]\n    final_result: dict\n\nclass WorkerState(TypedDict):\n    document: object\n    extracted: Annotated[list, operator.add]\n\ndef orchestrator(state: State):\n    # Return one Send for each document.\n    return [Send(\"extract\", {\"document\": document})\n            for document in state[\"documents\"]]\n\ndef extract(state: WorkerState):\n    information = extract_information(state[\"document\"])\n    return {\"extracted\": [information]}\n\ndef combine(state: State):\n    return {\"final_result\": merge_extracted_information(state[\"extracted\"])}\n```\n\nThe important design choice is `extracted: Annotated[list, operator.add]`. The graph documentation states that parallel branches may update the same state key, and a reducer combines those updates instead of allowing conflicting writes. For lists, the `operator.add` reducer concatenates the worker lists. Without a suitable reducer, concurrent writes to the same key can produce an `INVALID_CONCURRENT_GRAPH_UPDATE` error.\n\n`Send` is the documented mechanism for dynamic orchestrator-worker workflows. Each worker receives its own input/state, and worker outputs are written to a shared state key that the orchestrator can later use for synthesis. Therefore, the extraction result should be returned as a one-item list and accumulated in `extracted`, rather than having every worker overwrite one shared scalar value.\n\nThe graph should then fan in to `combine` after all worker branches complete. In the documented fan-out/fan-in model, nodes reached through parallel branches execute in the same superstep, and a downstream node executes after those parallel nodes finish. If a worker has multiple processing steps, the graph API also supports deferring a node until pending tasks are complete, which is useful for branches of different lengths.\n\nAdditional safety and execution considerations:\n\n- Parallel updates are not guaranteed to arrive in a consistent order. If the order of extracted records matters, include an ordering value—such as the document index—in each result and sort or otherwise order the results during combination. Do not depend on reducer arrival order.\n- A parallel superstep is transactional: if one branch raises an exception, none of that superstep's updates are applied. With a checkpointer, results from successful nodes in the superstep are saved and do not repeat when the workflow is resumed.\n- For transient failures, configure a retry policy or catch exceptions inside the worker. The documentation states that only failing branches are retried, so successful parallel work does not need to be redundantly repeated.\n- Since the workload contains hundreds of documents, set `max_concurrency` in the invocation configuration to bound the number of concurrent tasks, for example:\n\n```python\ngraph.invoke(\n    {\"documents\": documents},\n    {\"configurable\": {\"max_concurrency\": 10}},\n)\n```\n\nThis limits concurrency; the retrieved context does not specify an appropriate numeric limit for a particular document workload. The functional API is also documented as an alternative: create one task per document, invoke the tasks concurrently, wait for their results, and then merge the returned results. The graph API is preferable when the workflow itself benefits from explicit fan-out, fan-in, reducers, checkpointing, and graph-level control.",
+                "answer_length": 3716,
+                "prompt_tokens": 15019,
+                "completion_tokens": 975,
+                "total_tokens": 15994,
+                "estimated_cost": 0.0041738,
+                "generation_latency": 11.764453299998422,
+                "is_complete": true,
+                "round_number": 1,
+                "gaps_detected": []
+            }
+        ],
+        "judge_evaluation": {
+            "correctness": {
+                "score": 5.0,
+                "justification": "The answer correctly designs a LangGraph workflow for parallel document processing and safe state merging, accurately explaining how to prevent state conflicts using reducers and the Send API, and providing relevant safety considerations based on the retrieved context."
+            },
+            "groundedness": {
+                "score": 5.0,
+                "justification": "All significant technical claims, including the use of fan-out/fan-in, Send API, reducers (operator.add), transactional supersteps, checkpointers, retry policies, and max_concurrency, are directly supported by the retrieved documentation and implementation details."
+            },
+            "completeness": {
+                "score": 5.0,
+                "justification": "The answer thoroughly addresses the user's question by providing a workflow design, explaining state conflict prevention, and covering all important aspects like parallel execution, state management, reducers, Send API, concurrency control, and error handling, aligning well with the expected concepts."
+            },
+            "hallucination": {
+                "score": 0.0,
+                "justification": "The answer contains no unsupported or fabricated technical claims. All information presented is directly verifiable from the provided retrieved context."
+            },
+            "missing_concepts": [],
+            "unsupported_claims": []
+        },
+        "overall_metrics": {
+            "total_latency": 83.20372089999728,
+            "total_cost": 0.0188261,
+            "recall_at_k": 0.8333333333333334,
+            "precision_at_k": 0.36363636363636365,
+            "hit_rate": 1.0,
+            "mrr": 1.0
+        }
+    }
+]

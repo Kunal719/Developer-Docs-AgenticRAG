@@ -3,6 +3,18 @@ from models.query_input import BenchmarkQuestion
 
 class RetrievalEvaluator:
 
+    def _deduplicate_documents(self, documents: list[RetrievedDocument]) -> list[RetrievedDocument]:
+        # Preserve order of deduplication
+        seen_chunk_ids = set()
+        unique_documents : list[RetrievedDocument] = []
+
+        for doc in documents:
+            if doc.chunk_id not in seen_chunk_ids:
+                unique_documents.append(doc)
+                seen_chunk_ids.add(doc.chunk_id)
+
+        return unique_documents
+
     def evaluate(self, question: BenchmarkQuestion, stages: list[PipelineStage]) -> dict[str, float]:
         """
         Returns the overall metrics
@@ -19,6 +31,7 @@ class RetrievalEvaluator:
         }
 
         rrf_documents : list[RetrievedDocument] = []
+        reranked_documents: list[RetrievedDocument] = []
 
         for stage in stages:
             # Calculate Recall@K when stage is RRF Fusion
@@ -26,18 +39,28 @@ class RetrievalEvaluator:
                 rrf_documents.extend(stage.documents)
 
             elif stage.name == "Reranker":
-                precision_at_k = self._calculate_precision_at_k(question.expected_files, stage.documents)
-                retrieved_metrics["precision_at_k"] = precision_at_k
+                reranked_documents.extend(stage.documents)
 
-                hit_rate = self._calculate_hit_rate(question.expected_files, stage.documents)
-                retrieved_metrics["hit_rate"] = hit_rate
-
-                mrr = self._calculate_mrr(question.expected_files, stage.documents)
-                retrieved_metrics["mrr"] = mrr
-
+        
         if rrf_documents:
+            # Remove Duplicates
+            rrf_documents = self._deduplicate_documents(rrf_documents)
+
             recall_at_k = self._calculate_recall_at_k(question.expected_files, rrf_documents)
             retrieved_metrics["recall_at_k"] = recall_at_k
+
+        if reranked_documents:
+            # Remove duplicates
+            reranked_documents = self._deduplicate_documents(reranked_documents)
+
+            precision_at_k = self._calculate_precision_at_k(question.expected_files, reranked_documents)
+            retrieved_metrics["precision_at_k"] = precision_at_k
+
+            hit_rate = self._calculate_hit_rate(question.expected_files, reranked_documents)
+            retrieved_metrics["hit_rate"] = hit_rate
+
+            mrr = self._calculate_mrr(question.expected_files, reranked_documents)
+            retrieved_metrics["mrr"] = mrr
 
         return retrieved_metrics
 
@@ -92,8 +115,8 @@ class RetrievalEvaluator:
             retrieved_documents: The retrieved documents
         """
 
-        for doc in retrieved_documents:
+        for rank, doc in enumerate(retrieved_documents, start=1):
             if doc.source in expected_files:
-                return 1.0 / doc.rank
+                return 1.0 / rank
 
         return 0.0

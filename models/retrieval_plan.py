@@ -18,7 +18,7 @@ class MetadataFilters(BaseModel):
     module_names: list[str] | None = Field(default_factory=list)
     class_names: list[str] | None = Field(default_factory=list)
     function_names: list[str] | None = Field(default_factory=list)
-    category: str | None = None
+    category: Literal["general", "errors", "frontend"] | None = None
 
     @model_validator(mode="after")
     def _category_requires_doc_corpus(self) -> "MetadataFilters":

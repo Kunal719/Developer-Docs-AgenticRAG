@@ -22,7 +22,10 @@ class CrossEncoderReranker(BaseReranker):
         pairs = [(query, doc.page_content) for doc in documents]
 
         start_time = perf_counter()
-        scores = self._rerank_model.predict(pairs)
+        scores = self._rerank_model.predict(
+            pairs,
+            batch_size=16
+            )
 
         scored_docs = list(zip(documents, scores))
 

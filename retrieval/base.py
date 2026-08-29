@@ -9,7 +9,7 @@ class BaseRetriever(ABC):
     """
 
     @abstractmethod
-    def retrieve(self, query: str, observer: PipelineObserver | None = None, filters: MetadataFilters | None = None,) -> list[Document]:
+    def retrieve(self, query: str, observer: PipelineObserver | None = None, filters: MetadataFilters | None = None, gap_top_k: int | None = None) -> list[Document]:
         """
         Retrieve the most relevant documents for given query
         

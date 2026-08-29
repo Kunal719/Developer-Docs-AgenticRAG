@@ -7,6 +7,7 @@ from evaluation.models import RetrievedDocument
 
 from langchain_core.documents import Document
 
+from concurrent.futures import ThreadPoolExecutor
 from time import perf_counter
 
 class MultiQueryRetrievalStrategy():
@@ -38,16 +39,22 @@ class MultiQueryRetrievalStrategy():
 
         return fused_docs, fused_scores
 
-    def retrieve(self, queries: list[str], retriever: BaseRetriever, filters: MetadataFilters | None = None, observer: PipelineObserver | None = None) -> list[Document]:
-
-        query_results = []
+    def retrieve(self, queries: list[str], retriever: BaseRetriever, filters: MetadataFilters | None = None, observer: PipelineObserver | None = None) -> list[Document]:   
 
         start_time = perf_counter()
-        for query in queries:
-            # We will not add internal query retrieval stages in observer
-            documents = retriever.retrieve(query, observer=None, filters=filters)
 
-            query_results.append(documents)
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            sub_query_results = [
+                executor.submit(
+                    retriever.retrieve,
+                    query=query,
+                    observer=None,
+                    filters=filters,
+                )
+                for query in queries
+            ]
+
+            query_results = [sub_query.result() for sub_query in sub_query_results]
 
         fused_documents, fused_scores = self._rrf(query_results)
         end_time = perf_counter()

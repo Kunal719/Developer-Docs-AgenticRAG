@@ -14,7 +14,7 @@ from retrieval.multi_query_retrieval_strategy import MultiQueryRetrievalStrategy
 
 from router.query_router import QueryRouter
 
-from reranking.cross_encoder import CrossEncoderReranker
+from reranking.base_reranker import BaseReranker
 
 from models.query_input import to_query_input
 
@@ -41,7 +41,7 @@ from config import (
     JUDGE_MODEL_PROVIDER,
 )
 
-class AgenticBenchmarkrunner:
+class AgenticBenchmarkRunner:
     def __init__(
             self, 
             questions_path: Path, 
@@ -53,7 +53,7 @@ class AgenticBenchmarkrunner:
             multi_corpus_retriever: MultiCorpusRetriever,
             multi_query_strategy: MultiQueryRetrievalStrategy,
             code_vector_store: Chroma,
-            reranker: CrossEncoderReranker
+            reranker: BaseReranker
             ):
         self._questions_path = questions_path
         self._router_llm = router_llm
@@ -115,6 +115,8 @@ class AgenticBenchmarkrunner:
                 stages=observer.get_pipeline_stages()
             )
 
+            retrieval_plan = observer.get_retrieval_plan()
+
             # Evaluate the generated response
 
             judge_evaluation, judge_cost = judge.evaluate(
@@ -152,7 +154,7 @@ class AgenticBenchmarkrunner:
                 reranker_top_k=RERANK_TOP_K,
                 reranker_name=RERANKER_MODEL,
                 judge_model=JUDGE_MODEL_NAME,
-                judge_provider=JUDGE_MODEL_PROVIDER,
+                judge_llm_provider=JUDGE_MODEL_PROVIDER,
                 router_llm=MODEL_NAME,
                 router_llm_provider=MODEL_PROVIDER
             )
@@ -164,11 +166,14 @@ class AgenticBenchmarkrunner:
                     final_answer=generated_answer.answer,
                     experiment_metadata=experiment_metadata,
                     router_metrics=observer.get_router_metrics(),
+                    retrieval_plan=retrieval_plan,
                     pipeline_stages=observer.get_pipeline_stages(),
                     generation_metrics=observer.get_generation_metrics(),
                     judge_evaluation=judge_evaluation,
                     overall_metrics=overall_metrics
                 )
             )
+
+        return results
 
 

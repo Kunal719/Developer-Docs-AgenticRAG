@@ -12,6 +12,8 @@ from retrieval.multi_corpus_retriever import MultiCorpusRetriever
 
 from evaluation.observer import PipelineObserver
 
+from config import GAP_HYBRID_TOP_K
+
 
 def build_rerank_query(q: QueryInput) -> str:
     parts = [q.question]
@@ -74,7 +76,10 @@ def retrieve_candidates(
 
     if plan.retrieval_mode == "direct":
         query = query_override or build_rerank_query(query_input)
-        candidates = retriever.retrieve(query, observer, plan.metadata_filters)
+        if plan.reasoning == "Gap retrieval loop":
+            candidates = retriever.retrieve(query, observer, plan.metadata_filters, GAP_HYBRID_TOP_K)
+        else:
+            candidates = retriever.retrieve(query, observer, plan.metadata_filters)
 
     elif plan.retrieval_mode == "combined_query":
         candidates = retriever.retrieve(

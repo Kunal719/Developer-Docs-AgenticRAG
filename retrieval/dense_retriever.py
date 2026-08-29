@@ -16,7 +16,7 @@ class DenseRetriever(BaseRetriever):
         self._vector_store = vector_store
         self._top_k = top_k
 
-    def retrieve(self, query: str, observer: PipelineObserver | None = None, filters: MetadataFilters = None) -> list[Document]:
+    def retrieve(self, query: str, observer: PipelineObserver | None = None, filters: MetadataFilters = None, gap_top_k: int | None = None) -> list[Document]:
         """
         Retrieve the most relevant documents using Dense Retriever
 

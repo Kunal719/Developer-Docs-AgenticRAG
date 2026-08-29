@@ -9,7 +9,7 @@ from ingestion.chunker import assign_chunk_id
 from langchain_community.retrievers import BM25Retriever
 
 
-from config import BM25_TOP_K, CHUNK_SIZE, CHUNK_OVERLAP
+from config import BM25_TOP_K
 from pathlib import Path
 from collections.abc import Callable
 

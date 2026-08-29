@@ -1,38 +1,49 @@
 [
-  {
-    "id": 36,
-    "category": "serialization",
-    "intent": "checkpoint_deserialization_type_reconstruction",
-    "difficulty": "very_hard",
-    "question": "A LangGraph application stores custom Python objects in state. The checkpoint is written successfully, but after process restart the restored value is a plain structure rather than the original custom type, causing application code to fail only after resume. Explain the serialization/deserialization path through JsonPlusSerializer, how type metadata is encoded and reconstructed, when pickle or msgpack fallbacks are involved, how serializer configuration controls which Python types can be reconstructed, and why the failure can appear during resumed execution rather than at the moment the checkpoint was created.",
-    "code_snippet": "from dataclasses import dataclass\nfrom typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.checkpoint.memory import InMemorySaver\n\n@dataclass\nclass UserContext:\n    user_id: str\n    role: str\n\nclass State(TypedDict):\n    context: UserContext\n\ndef use_context(state):\n    return {\"context\": state[\"context\"]}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"use\", use_context)\nbuilder.add_edge(START, \"use\")\nbuilder.add_edge(\"use\", END)\ngraph = builder.compile(checkpointer=InMemorySaver())\n\nconfig = {\"configurable\": {\"thread_id\": \"types-1\"}}\ngraph.invoke({\"context\": UserContext(\"u1\", \"admin\")}, config)\n# Simulate restart and resume from the persisted checkpoint.",
-    "error": "",
-    "observed_behavior": "",
-    "expected_behavior": "",
-    "expected_files": [
-      "checkpoint/langgraph/checkpoint/serde/base.py",
-      "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
-      "checkpoint/langgraph/checkpoint/serde/encrypted.py",
-      "checkpoint/langgraph/checkpoint/base/__init__.py",
-      "persistence.mdx"
-    ],
-    "concepts": [
-      "checkpoint serialization",
-      "deserialization",
-      "JsonPlusSerializer",
-      "type reconstruction",
-      "msgpack",
-      "pickle fallback",
-      "strict deserialization"
-    ],
-    "tags": [
-      "serialization",
-      "deserialization",
-      "JsonPlusSerializer",
-      "custom_types",
-      "msgpack",
-      "pickle",
-      "checkpoint"
-    ]
-  }
+ {
+  "id": 13,
+  "category": "debugging",
+  "intent": "long_running_tool_recovery",
+  "difficulty": "very_hard",
+  "question": "A production LangGraph workflow executes a long-running external tool that can take several minutes to complete. The workflow uses checkpointing for durable execution. The tool sometimes completes successfully, but the process fails or loses progress before the tool result is durably recorded. After recovery, the same tool operation is executed again, and the external system reports duplicate operations. Review this architecture and determine how LangGraph checkpointing, task boundaries, durable execution, retries, and external side effects interact. Explain whether checkpointing provides exactly-once execution of the external operation, when unfinished work can be executed again, and how the application should be designed to prevent duplicate side effects while still allowing recovery.",
+  "queries": [
+    "How does LangGraph durable execution recover a workflow after a failure during a long-running task?",
+    "How should LangGraph tasks be used around external API calls and side effects so completed work can be recovered safely?",
+    "When can an unfinished LangGraph task be executed again after checkpoint recovery?",
+    "Does LangGraph checkpointing guarantee exactly-once execution of external side effects?",
+    "How should external side effects in LangGraph be made idempotent when tasks can be retried or re-executed?",
+    "What guarantees does LangGraph provide for checkpoint recovery, task replay, and failed task execution?"
+  ],
+  "code_snippet": "def process_order(state):\n    result = external_api.process_order(state[\"order_id\"])\n    return {\"order_result\": result}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"process_order\", process_order)\nbuilder.add_edge(START, \"process_order\")\nbuilder.add_edge(\"process_order\", END)\n\ngraph = builder.compile(checkpointer=checkpointer)\n\nconfig = {\n    \"configurable\": {\n        \"thread_id\": \"order-123\"\n    }\n}\n\nresult = graph.invoke(\n    {\"order_id\": \"order-123\"},\n    config=config\n)",
+  "error": null,
+  "observed_behavior": "The external operation sometimes completes successfully, but after a process failure the workflow resumes and executes the same operation again. The external system records two operations for the same order.",
+  "expected_behavior": "The workflow should recover from failures without unintentionally duplicating external side effects. Completed work should be recoverable, while incomplete work should be safe to retry.",
+  "logs": null,
+  "expected_files": [
+    "fault-tolerance.mdx",
+    "persistence.mdx",
+    "checkpointers.mdx",
+    "use-graph-api.mdx",
+    "workflows-agents.mdx"
+  ],
+  "concepts": [
+    "durable execution",
+    "checkpointing",
+    "tasks",
+    "fault tolerance",
+    "retries",
+    "external side effects",
+    "idempotency",
+    "exactly-once execution",
+    "recovery"
+  ],
+  "tags": [
+    "long_running_tool",
+    "duplicate_execution",
+    "checkpoint_recovery",
+    "durable_execution",
+    "side_effects",
+    "idempotency",
+    "retry_safety"
+  ]
+}
 ]

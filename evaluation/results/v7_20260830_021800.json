@@ -1,0 +1,2214 @@
+[
+    {
+        "question": {
+            "question": "A production LangGraph workflow executes a long-running external tool that can take several minutes to complete. The workflow uses checkpointing for durable execution. The tool sometimes completes successfully, but the process fails or loses progress before the tool result is durably recorded. After recovery, the same tool operation is executed again, and the external system reports duplicate operations. Review this architecture and determine how LangGraph checkpointing, task boundaries, durable execution, retries, and external side effects interact. Explain whether checkpointing provides exactly-once execution of the external operation, when unfinished work can be executed again, and how the application should be designed to prevent duplicate side effects while still allowing recovery.",
+            "code_snippet": "def process_order(state):\n    result = external_api.process_order(state[\"order_id\"])\n    return {\"order_result\": result}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"process_order\", process_order)\nbuilder.add_edge(START, \"process_order\")\nbuilder.add_edge(\"process_order\", END)\n\ngraph = builder.compile(checkpointer=checkpointer)\n\nconfig = {\n    \"configurable\": {\n        \"thread_id\": \"order-123\"\n    }\n}\n\nresult = graph.invoke(\n    {\"order_id\": \"order-123\"},\n    config=config\n)",
+            "error": null,
+            "logs": null,
+            "observed_behavior": "The external operation sometimes completes successfully, but after a process failure the workflow resumes and executes the same operation again. The external system records two operations for the same order.",
+            "expected_behavior": "The workflow should recover from failures without unintentionally duplicating external side effects. Completed work should be recoverable, while incomplete work should be safe to retry.",
+            "id": 13,
+            "category": "debugging",
+            "intent": "long_running_tool_recovery",
+            "difficulty": "very_hard",
+            "expected_files": [
+                "fault-tolerance.mdx",
+                "persistence.mdx",
+                "checkpointers.mdx",
+                "use-graph-api.mdx",
+                "workflows-agents.mdx"
+            ],
+            "concepts": [
+                "durable execution",
+                "checkpointing",
+                "tasks",
+                "fault tolerance",
+                "retries",
+                "external side effects",
+                "idempotency",
+                "exactly-once execution",
+                "recovery"
+            ],
+            "tags": [
+                "long_running_tool",
+                "duplicate_execution",
+                "checkpoint_recovery",
+                "durable_execution",
+                "side_effects",
+                "idempotency",
+                "retry_safety"
+            ],
+            "evidence": null,
+            "queries": [
+                "How does LangGraph durable execution recover a workflow after a failure during a long-running task?",
+                "How should LangGraph tasks be used around external API calls and side effects so completed work can be recovered safely?",
+                "When can an unfinished LangGraph task be executed again after checkpoint recovery?",
+                "Does LangGraph checkpointing guarantee exactly-once execution of external side effects?",
+                "How should external side effects in LangGraph be made idempotent when tasks can be retried or re-executed?",
+                "What guarantees does LangGraph provide for checkpoint recovery, task replay, and failed task execution?"
+            ]
+        },
+        "final_answer": "## Retrieved facts\n\n- LangGraph checkpoints persist a thread's graph state and can restore it later. Checkpointing supports fault tolerance and recovery from the last successful step.\n- For a failed super-step, LangGraph stores pending writes from other nodes that completed successfully. When execution resumes, those successful nodes are not re-run.\n- Plain Graph API nodes re-run from the start of the node function when a run resumes. Therefore, in the supplied code, `process_order` can call `external_api.process_order(...)` again if the node's result was not durably recorded before the failure.\n- The documentation explicitly recommends making node side effects idempotent because node re-execution can otherwise corrupt state or create duplicate database rows.\n- Functional API tasks have more precise replay behavior: completed task results can be restored from the checkpoint, while a task that started but did not finish may run again after resume. The documentation therefore also requires task side effects to be idempotent.\n- The retry implementation clears `task.writes` before each attempt and can execute a task again after a retryable exception. Thus, retries are another situation in which an external side effect may be performed more than once unless the operation is idempotent.\n- A numeric task timeout or a `TimeoutPolicy` applies to each task attempt. The retrieved context states that timeouts are supported for async tasks, not sync tasks, but it does not establish a timeout configuration for the supplied synchronous graph node.\n- With `\"sync\"` durability, LangGraph persists each checkpoint before starting the next step. With `\"async\"`, persistence occurs asynchronously while the next step executes, so a process crash can prevent a checkpoint from being written. With `\"exit\"`, intermediate state is not saved and mid-execution recovery is unavailable after a system failure.\n\n## Application of those facts to the code\n\nThe external call occurs directly inside a plain Graph API node:\n\n```python\nresult = external_api.process_order(state[\"order_id\"])\n```\n\nThe call and the checkpoint recording of the node's returned state are separate operations. If the external system commits the order operation and the process fails before LangGraph durably records `{\"order_result\": result}`, LangGraph cannot infer that the external operation already succeeded. On recovery, the node is eligible to run from its beginning, so the external call can be issued again.\n\nThis is an inference from the documented node re-execution and checkpoint behavior: checkpointing does **not** provide exactly-once execution of an arbitrary external operation. It provides recovery of persisted graph state and completed work that was successfully recorded. It cannot make an external side effect and checkpoint persistence one atomic transaction unless the retrieved context specifically establishes such an integration; it does not.\n\nThe same issue remains if the call is moved into a `task`. A task boundary improves durable replay because a completed task result can be restored, but an operation that completes externally and fails before the task result is checkpointed is still an unfinished task from LangGraph's perspective and may be executed again. A retry can likewise repeat the operation.\n\n## Recommended design\n\nMake the external operation idempotent using an application-level idempotency key derived from the logical operation, such as the order ID, if the external system supports that contract. The external service should record the key and return the existing result when it receives the same key again, rather than creating a second operation. An equivalent design is an atomic upsert or a read-before-write check in the external system, provided that the check and write cannot race.\n\nConceptually, the operation should behave like:\n\n```python\n# The exact external API signature is application-specific.\n# The external service must enforce uniqueness for this operation key.\nresult = external_api.process_order(\n    order_id=state[\"order_id\"],\n    idempotency_key=f\"process-order:{state['order_id']}\",\n)\nreturn {\"order_result\": result}\n```\n\nThe retrieved context does not document an `idempotency_key` parameter for `external_api.process_order`; the example is therefore an application-level pattern, not a LangGraph API claim.\n\nFor the Functional API, the documentation recommends placing API calls and other side effects inside tasks, so completed task results can be replayed from checkpoints instead of repeating completed work. A task-based version would still require the external operation to be idempotent because unfinished tasks and retry attempts may execute again.\n\nFor a long-running operation, the external system should also expose a way to query operation status by the same idempotency key, or otherwise support resumable/polling semantics. Then the workflow can submit the operation once, safely retry submission with the same key, and retrieve the already-created result after recovery. The retrieved context does not specify an API for such polling, so the exact implementation is application-specific.\n\nFinally, choose a durability mode according to the failure guarantee required. `\"sync\"` reduces the window in which a completed graph step lacks a persisted checkpoint, but it still does not atomically couple the external side effect with checkpoint storage. It therefore improves checkpoint durability without establishing exactly-once external execution.\n\n## Conclusion\n\nThe observed duplicate is consistent with the documented behavior and does not indicate that checkpointing is malfunctioning. The external operation completed, but its graph result was not durably recorded; the plain node then ran again during recovery. The safe model is **at-least-once execution for unfinished work**, with persisted results allowing completed work to be skipped or replayed. Prevent duplicates at the application/external-system boundary using idempotency keys, atomic upserts, or equivalent deduplication, and place side effects in task boundaries when using the Functional API so completed results can be replayed efficiently.",
+        "experiment_metadata": {
+            "version": "v7",
+            "timestamp": "2026-08-30T02:18:00.349119",
+            "embedding_model": "text-embedding-3-small",
+            "llm_provider": "openai",
+            "llm": "gpt-5.6-luna",
+            "chunk_size": 1200,
+            "chunk_overlap": 200,
+            "dense_top_k": 10,
+            "bm25_top_k": 10,
+            "hybrid_top_k": 16,
+            "rrf_k": 60,
+            "reranker_top_k": 13,
+            "reranker_name": "BAAI/bge-reranker-base",
+            "judge_model": "gemini-2.5-flash",
+            "judge_llm_provider": "google_genai",
+            "router_llm": "gpt-5.6-luna",
+            "router_llm_provider": "openai"
+        },
+        "router_metrics": {
+            "name": "Query Router",
+            "prompt_tokens": 1796,
+            "completion_tokens": 431,
+            "total_tokens": 2227,
+            "estimated_cost": 0.0008764,
+            "router_latency": 7.149667099998624
+        },
+        "retrieval_plan": {
+            "retrieval_mode": "combined_query",
+            "reasoning": "The question combines closely related concerns—checkpoint persistence, task boundaries, replay/retry semantics, and idempotent external side effects—that are best retrieved together across both documentation and implementation evidence.",
+            "sub_queries": [
+                "how LangGraph checkpointing and durable execution handle unfinished node work after process failure",
+                "when completed or interrupted tasks and nodes are replayed or retried during recovery",
+                "whether LangGraph guarantees exactly-once execution for external side effects inside a node",
+                "how to make external operations idempotent and safely recoverable without duplicate side effects"
+            ],
+            "combined_query": "A production LangGraph workflow executes a long-running external tool and sometimes loses progress before its result is durably checkpointed, then repeats the operation after recovery and creates duplicate external side effects. Explain how checkpointing, task boundaries, durable execution, retries, and recovery interact; whether LangGraph provides exactly-once execution; when unfinished work can run again; and how to design idempotent or deduplicated external operations so completed work is recoverable and incomplete work is safe to retry. Code uses StateGraph, a process_order node calling external_api.process_order, graph.compile(checkpointer=checkpointer), and graph.invoke with a thread_id. LangGraph checkpoint recovery, task boundaries, durable execution, retries, replay, side effects, idempotency, exactly-once semantics, process failure",
+            "metadata_filters": {
+                "corpus": null,
+                "module_names": null,
+                "class_names": [
+                    "StateGraph"
+                ],
+                "function_names": [
+                    "invoke"
+                ],
+                "category": null
+            }
+        },
+        "pipeline_stages": [
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.052027099998667836,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "eb5a3c810545d1514885c2fd8c12f714f71875dd336df2f6e505e276248fd5f6",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7c6c20bcfb1a96cba0188836041be1de013e61e0f49eb4e80df6cbb12eda819f",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "638a99a6ef76f7f954f94505272086e3313bab05f80d133a62eac6dcb10f8081",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "bb7223a4963a4c640943ade0a46ee27e25499481b59bac67e321ee56090817b5",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "482b795f99bd9575ca7d1c346c0c9148cec173c66e425135814a6c007c971296",
+                        "source": "fault-tolerance.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "edea3ed95318da10fca89a95d549d05cadddc044e835d06213e911fb92d0f580",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3c2b1b397a13186bebcae8227052790ba24b793356f079d1cad7a9ac4ff8fb06",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d9ca400aad3c3006591f6e7533cbe5d7d3b19ff62cd8a0b8adec48b3418e82d0",
+                        "source": "fault-tolerance.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "938e36a1b5c641f044ea9635b2048bbbe13c021b44118fdb4d9ecc6b229b43b6",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 3.472903599998972,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "682e3a573f64f138483207e139d63f596d756872e388b7ee14916df8a5f7e958",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9c0c6a9b973b364e42b5be1269603e56b11659918731f2b7085a2b0123b3e7d8",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "fbbafaafe529a5ceb9c9dd5fb930ccf1458d018ad0f8b1c76eb27a18e6d04537",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2868765c5d0fd1baaa86a34853efa4fe85299594d1c8e1b0aaa0b0026d0918f8",
+                        "source": "errors/MISSING_CHECKPOINTER.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f743255e931c39e61c0f266cc4cd59617816484b90871c4a5bf81d577c8134e9",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9a256fd813ee4caeabdaced608bbdd59e33856f4005d98c249652497bc7f4727",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c2d9d4baaa1e3f6c66ed3f66bc0a31aab45336a2e837a16e26bd74e5da8ec180",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8b6a88000398431610ba73914e76208c6c836a2fd8e02cdc608c64f67e99ee9b",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8a4a9ae5448e95ac084a70a866d01b4fa6cf02624ebe67d760de1c35da8f2a89",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "482b795f99bd9575ca7d1c346c0c9148cec173c66e425135814a6c007c971296",
+                        "source": "fault-tolerance.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 8.600000001024455e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "482b795f99bd9575ca7d1c346c0c9148cec173c66e425135814a6c007c971296",
+                        "source": "fault-tolerance.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.029437229437229435,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "682e3a573f64f138483207e139d63f596d756872e388b7ee14916df8a5f7e958",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "9c0c6a9b973b364e42b5be1269603e56b11659918731f2b7085a2b0123b3e7d8",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "eb5a3c810545d1514885c2fd8c12f714f71875dd336df2f6e505e276248fd5f6",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "fbbafaafe529a5ceb9c9dd5fb930ccf1458d018ad0f8b1c76eb27a18e6d04537",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "7c6c20bcfb1a96cba0188836041be1de013e61e0f49eb4e80df6cbb12eda819f",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "2868765c5d0fd1baaa86a34853efa4fe85299594d1c8e1b0aaa0b0026d0918f8",
+                        "source": "errors/MISSING_CHECKPOINTER.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "638a99a6ef76f7f954f94505272086e3313bab05f80d133a62eac6dcb10f8081",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "f743255e931c39e61c0f266cc4cd59617816484b90871c4a5bf81d577c8134e9",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "bb7223a4963a4c640943ade0a46ee27e25499481b59bac67e321ee56090817b5",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "9a256fd813ee4caeabdaced608bbdd59e33856f4005d98c249652497bc7f4727",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.045540899998741224,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "521c96d0284a6fdd57f19c2a768842a65d6a3930cd9ddbe826cb4d4b2cbcd4eb",
+                        "source": "langgraph/langgraph/func/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "959806e500e58865b49021882ab11003b1e5780c09a2f3304cc43a5517248b59",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5d5fbe6abea93f661ebcafe9f8699caa1a354479c9738815488f5b2ad61ef948",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7557036a78a27034c23748cbfc72ddbbc116e028face680fe5c7f4003ce42e23",
+                        "source": "langgraph/langgraph/pregel/_write.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "21dedb7aff3314145f2d642e1bdbcff3b3399ebaa5c629c4dc4497131f89bc3d",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b1c72864853fae07e0f43ccfd9038724c66d1f7f2c6df824dc768a52b601d320",
+                        "source": "prebuilt/langgraph/prebuilt/chat_agent_executor.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6f53d0374e3db1b303309e634ee9754a9f3864f3b8520a5ab729c405bdd69538",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 0.5562480999942636,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "2c654817647443ba6a8adc03e4b51d932f6ea88b6815728d7a1e8485f3015858",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "e894bde9ca170c1363c6bc03adacee50ca72dac15acb93aaa51c0961fb907c93",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d81e042c06b3b685a59fea39f533090c3872aa5dde672ce22bf16c41d0c02e1f",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "bfd77086f04c47df5dae309a1aaf4a5595fb2f3239856fc5a633a12c858891da",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ca860c6c5f97707d209b3556d07784019f7f0a99237372d099d022bbf8f1635b",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "04272280679ee9101752114abef6763f1aa3fe740e28d8234841e233a8388000",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "edb712c9e7d8b68fb807989213f6d91162665c00c029307cdd5613d9d4eb6c6a",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2edba26715b5b99d37ea58623d5897a3851df706356eb9273a2b46e784265e14",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1753e2c35cc0df8150262b02368ab64d3e8b342a26a2591eaed6705708f00c33",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7c48952a85d91eb47c28495a00ea112e37ff98b8614d5c8dc614ae806da783b3",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 0.00017880000086734071,
+                "top_k": 16,
+                "documents": [
+                    {
+                        "chunk_id": "2c654817647443ba6a8adc03e4b51d932f6ea88b6815728d7a1e8485f3015858",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "e894bde9ca170c1363c6bc03adacee50ca72dac15acb93aaa51c0961fb907c93",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "d81e042c06b3b685a59fea39f533090c3872aa5dde672ce22bf16c41d0c02e1f",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "521c96d0284a6fdd57f19c2a768842a65d6a3930cd9ddbe826cb4d4b2cbcd4eb",
+                        "source": "langgraph/langgraph/func/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "bfd77086f04c47df5dae309a1aaf4a5595fb2f3239856fc5a633a12c858891da",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "ca860c6c5f97707d209b3556d07784019f7f0a99237372d099d022bbf8f1635b",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "959806e500e58865b49021882ab11003b1e5780c09a2f3304cc43a5517248b59",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "04272280679ee9101752114abef6763f1aa3fe740e28d8234841e233a8388000",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "5d5fbe6abea93f661ebcafe9f8699caa1a354479c9738815488f5b2ad61ef948",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "edb712c9e7d8b68fb807989213f6d91162665c00c029307cdd5613d9d4eb6c6a",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 13
+                    },
+                    {
+                        "chunk_id": "7557036a78a27034c23748cbfc72ddbbc116e028face680fe5c7f4003ce42e23",
+                        "source": "langgraph/langgraph/pregel/_write.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 14
+                    },
+                    {
+                        "chunk_id": "2edba26715b5b99d37ea58623d5897a3851df706356eb9273a2b46e784265e14",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 15
+                    },
+                    {
+                        "chunk_id": "21dedb7aff3314145f2d642e1bdbcff3b3399ebaa5c629c4dc4497131f89bc3d",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 16
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 23.227781399997184,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "f743255e931c39e61c0f266cc4cd59617816484b90871c4a5bf81d577c8134e9",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 3.200878858566284,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "e894bde9ca170c1363c6bc03adacee50ca72dac15acb93aaa51c0961fb907c93",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.8130316734313965,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "d81e042c06b3b685a59fea39f533090c3872aa5dde672ce22bf16c41d0c02e1f",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.7220072746276855,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.6961236000061035,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "7557036a78a27034c23748cbfc72ddbbc116e028face680fe5c7f4003ce42e23",
+                        "source": "langgraph/langgraph/pregel/_write.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.6402735710144043,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "9c0c6a9b973b364e42b5be1269603e56b11659918731f2b7085a2b0123b3e7d8",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 2.510868787765503,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "2edba26715b5b99d37ea58623d5897a3851df706356eb9273a2b46e784265e14",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.446514368057251,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "ca860c6c5f97707d209b3556d07784019f7f0a99237372d099d022bbf8f1635b",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.374856948852539,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "bfd77086f04c47df5dae309a1aaf4a5595fb2f3239856fc5a633a12c858891da",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.261045455932617,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "2868765c5d0fd1baaa86a34853efa4fe85299594d1c8e1b0aaa0b0026d0918f8",
+                        "source": "errors/MISSING_CHECKPOINTER.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 2.180220603942871,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.1318135261535645,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "521c96d0284a6fdd57f19c2a768842a65d6a3930cd9ddbe826cb4d4b2cbcd4eb",
+                        "source": "langgraph/langgraph/func/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.0182559490203857,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 2.012279510498047,
+                        "rank": 13
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.016693899997335393,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "7dcd234b4c5423fe9726fa77b13df3c4e420b52223070359c9f60cfb4d47614e",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6829800823878628b6f8565931062a50d4a6cddba9d18e592121bc1201de1c5d",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d6a3f87ea4583cfbdce439e8aa3cf788ce7bb654fb09e0ee1d3ee1fd6625b6bb",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7c6c20bcfb1a96cba0188836041be1de013e61e0f49eb4e80df6cbb12eda819f",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "638a99a6ef76f7f954f94505272086e3313bab05f80d133a62eac6dcb10f8081",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "22f8c9fdd64135df709e38f35e2773c279007a08bf74b3e1f047ebd6154e7567",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "015eb61127a5129fdc7f9f1f47509716dd0753d2c24e5facec667becb74159c1",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "edea3ed95318da10fca89a95d549d05cadddc044e835d06213e911fb92d0f580",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "482b795f99bd9575ca7d1c346c0c9148cec173c66e425135814a6c007c971296",
+                        "source": "fault-tolerance.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 4.445549999996729,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "9a256fd813ee4caeabdaced608bbdd59e33856f4005d98c249652497bc7f4727",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a8be5f9022fe311529bd4e2581b1b8b1167c23d9cb2a0a329555a681d19ae15e",
+                        "source": "persistence.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "682e3a573f64f138483207e139d63f596d756872e388b7ee14916df8a5f7e958",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "57fe00a0dcc5e4cc83852340798b76570646aeec4a05e89e9725410e371fe7eb",
+                        "source": "add-memory.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ecb6c361f7e8f04f5267d2a9d68db5d759ebbb0f5ea832b9ee8031d7926910fe",
+                        "source": "persistence.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8b6a88000398431610ba73914e76208c6c836a2fd8e02cdc608c64f67e99ee9b",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "81aa778e33091beb5adca8f0e7a872b1a5044a01f7eb6e85bbb992e33dcfa2d8",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f743255e931c39e61c0f266cc4cd59617816484b90871c4a5bf81d577c8134e9",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "888ea7ddf96b00318384425f991baccb41ebdf62380c76c7dcd53c0a361b0b7e",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9c0c6a9b973b364e42b5be1269603e56b11659918731f2b7085a2b0123b3e7d8",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 6.98000003467314e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "9a256fd813ee4caeabdaced608bbdd59e33856f4005d98c249652497bc7f4727",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "7dcd234b4c5423fe9726fa77b13df3c4e420b52223070359c9f60cfb4d47614e",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "a8be5f9022fe311529bd4e2581b1b8b1167c23d9cb2a0a329555a681d19ae15e",
+                        "source": "persistence.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "6829800823878628b6f8565931062a50d4a6cddba9d18e592121bc1201de1c5d",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "682e3a573f64f138483207e139d63f596d756872e388b7ee14916df8a5f7e958",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "57fe00a0dcc5e4cc83852340798b76570646aeec4a05e89e9725410e371fe7eb",
+                        "source": "add-memory.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "d6a3f87ea4583cfbdce439e8aa3cf788ce7bb654fb09e0ee1d3ee1fd6625b6bb",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 10.64307920000283,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -0.16963626444339752,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "57fe00a0dcc5e4cc83852340798b76570646aeec4a05e89e9725410e371fe7eb",
+                        "source": "add-memory.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -2.390695095062256,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "9a256fd813ee4caeabdaced608bbdd59e33856f4005d98c249652497bc7f4727",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -2.9219675064086914,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "a8be5f9022fe311529bd4e2581b1b8b1167c23d9cb2a0a329555a681d19ae15e",
+                        "source": "persistence.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -3.2823448181152344,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "6829800823878628b6f8565931062a50d4a6cddba9d18e592121bc1201de1c5d",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -4.752866744995117,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.0066976000016438775,
+                "top_k": 10,
+                "documents": []
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 0.6803803000002517,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "65a36cf60f58981d4548908ac433d523226ede4322289ee9ba732df55187cc9c",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "dffc6ab933e426227ee8c97e6ca8106632f66f0b8fcfc378567527bc177d7db8",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "65c6b3761255442b5c0837bf4e1b9dbc3070cc92225484a5cbd20cc492830fb8",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "65c6b3761255442b5c0837bf4e1b9dbc3070cc92225484a5cbd20cc492830fb8",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "edea3ed95318da10fca89a95d549d05cadddc044e835d06213e911fb92d0f580",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "015eb61127a5129fdc7f9f1f47509716dd0753d2c24e5facec667becb74159c1",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7dcd234b4c5423fe9726fa77b13df3c4e420b52223070359c9f60cfb4d47614e",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8ea30d59d78345ca25216ba3b242c3fbd03eb5c4b30047e8824db1d68f73bdb2",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "e6f26b76a0ef6aaff5f772120a181a8e45005aaba4b828c298f63e21d87d8afe",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 2.699999458855018e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "65c6b3761255442b5c0837bf4e1b9dbc3070cc92225484a5cbd20cc492830fb8",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.031009615384615385,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "65a36cf60f58981d4548908ac433d523226ede4322289ee9ba732df55187cc9c",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "dffc6ab933e426227ee8c97e6ca8106632f66f0b8fcfc378567527bc177d7db8",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "edea3ed95318da10fca89a95d549d05cadddc044e835d06213e911fb92d0f580",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "015eb61127a5129fdc7f9f1f47509716dd0753d2c24e5facec667becb74159c1",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "7dcd234b4c5423fe9726fa77b13df3c4e420b52223070359c9f60cfb4d47614e",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "8ea30d59d78345ca25216ba3b242c3fbd03eb5c4b30047e8824db1d68f73bdb2",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014492753623188406,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.0023593000005348586,
+                "top_k": 10,
+                "documents": []
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 1.2914652000035858,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "0541fb4ddf0925e8341a79c4751b414c018eb87d0e79dd9b5a1063f363ef9bbd",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f5c811fa4f546aa7f3052cf2c4ee9f1535e01d8638f2eb273223678b77bbc125",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3a306c274c569968578b4136e4a58b042af6c552724b7b2f2719fc1b8686857b",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "03bc11f41304b0eeedd6656a838f2b1ad86fe7dd8d3f9b8ba71c3d468bc30793",
+                        "source": "checkpoint-postgres/langgraph/store/postgres/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ef5c7a7ebd71b2eabe4801892598c67e5e05ad2bfbf149eb8983e479ee4caef9",
+                        "source": "checkpoint-postgres/langgraph/store/postgres/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5b7a9398b2c791feb1cbbd780937f96141eb017332641ad3caa3f07212fb3062",
+                        "source": "checkpoint-postgres/langgraph/store/postgres/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "99f960538c6bd6e2b022edd387719609334791b290ae4c9fd20fae06f5f498e9",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "dd7700f124a967e2a828af4b4928f2962e4f244c6477c83781622305e46cd2ee",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5a57af25ed4da62f7972769d144e54676c0edfca5d6b4385995dbccde1e700b1",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6f886924f31bb43ce1946a490759e78292504a3616e77faa40e524a5c2c78a1f",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 3.609999839682132e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "0541fb4ddf0925e8341a79c4751b414c018eb87d0e79dd9b5a1063f363ef9bbd",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "f5c811fa4f546aa7f3052cf2c4ee9f1535e01d8638f2eb273223678b77bbc125",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "3a306c274c569968578b4136e4a58b042af6c552724b7b2f2719fc1b8686857b",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "03bc11f41304b0eeedd6656a838f2b1ad86fe7dd8d3f9b8ba71c3d468bc30793",
+                        "source": "checkpoint-postgres/langgraph/store/postgres/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "ef5c7a7ebd71b2eabe4801892598c67e5e05ad2bfbf149eb8983e479ee4caef9",
+                        "source": "checkpoint-postgres/langgraph/store/postgres/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "5b7a9398b2c791feb1cbbd780937f96141eb017332641ad3caa3f07212fb3062",
+                        "source": "checkpoint-postgres/langgraph/store/postgres/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "99f960538c6bd6e2b022edd387719609334791b290ae4c9fd20fae06f5f498e9",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "dd7700f124a967e2a828af4b4928f2962e4f244c6477c83781622305e46cd2ee",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 13.247411099997407,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 3.2887861728668213,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "65c6b3761255442b5c0837bf4e1b9dbc3070cc92225484a5cbd20cc492830fb8",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -0.8880014419555664,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "65a36cf60f58981d4548908ac433d523226ede4322289ee9ba732df55187cc9c",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -1.2534873485565186,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "015eb61127a5129fdc7f9f1f47509716dd0753d2c24e5facec667becb74159c1",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -1.9771289825439453,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "7dcd234b4c5423fe9726fa77b13df3c4e420b52223070359c9f60cfb4d47614e",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -3.525010108947754,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.018447700000251643,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "81aa778e33091beb5adca8f0e7a872b1a5044a01f7eb6e85bbb992e33dcfa2d8",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d63094501b2178129013c616b56cba0a364736f07df5e7096309a5ce7acf260d",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "be222a774cc72007cc75778b06f15e1ec7f692bdfdf7c5cb218bc6bef6ede5a1",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6829800823878628b6f8565931062a50d4a6cddba9d18e592121bc1201de1c5d",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7dcd234b4c5423fe9726fa77b13df3c4e420b52223070359c9f60cfb4d47614e",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a20a05ea6c22a452042d8ab1215eb5e0ba4f0bfbf38dff43ba9e4da7696d75fa",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8ee3767b6535772f5c01c97666991a99a7b13fe2e1b67f93d5336bfe37e9db52",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ffb67f3b8eb01f8693ebdef055abbbdf323ca4ef20f2b3bf44dc26640ab27a96",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "15a69e5bc95bbe2f57684385647926621687938259efe0f6d53b4e85ac915aee",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 1.0415095999996993,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "682e3a573f64f138483207e139d63f596d756872e388b7ee14916df8a5f7e958",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9a256fd813ee4caeabdaced608bbdd59e33856f4005d98c249652497bc7f4727",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9c0c6a9b973b364e42b5be1269603e56b11659918731f2b7085a2b0123b3e7d8",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "81aa778e33091beb5adca8f0e7a872b1a5044a01f7eb6e85bbb992e33dcfa2d8",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8b6a88000398431610ba73914e76208c6c836a2fd8e02cdc608c64f67e99ee9b",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a8be5f9022fe311529bd4e2581b1b8b1167c23d9cb2a0a329555a681d19ae15e",
+                        "source": "persistence.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ecb6c361f7e8f04f5267d2a9d68db5d759ebbb0f5ea832b9ee8031d7926910fe",
+                        "source": "persistence.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a856a88712d46933d8048355924781809bbcc3b2ce28c6c80c729c62cc39c889",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "03d469ecdfa4755a3aa7c329e45b3cfd4bf3361175fc9b5d8e3812095c5bdb92",
+                        "source": "backward-compatibility.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "57fe00a0dcc5e4cc83852340798b76570646aeec4a05e89e9725410e371fe7eb",
+                        "source": "add-memory.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 5.780000356025994e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "81aa778e33091beb5adca8f0e7a872b1a5044a01f7eb6e85bbb992e33dcfa2d8",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.032018442622950824,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "682e3a573f64f138483207e139d63f596d756872e388b7ee14916df8a5f7e958",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "9a256fd813ee4caeabdaced608bbdd59e33856f4005d98c249652497bc7f4727",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "d63094501b2178129013c616b56cba0a364736f07df5e7096309a5ce7acf260d",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "9c0c6a9b973b364e42b5be1269603e56b11659918731f2b7085a2b0123b3e7d8",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "be222a774cc72007cc75778b06f15e1ec7f692bdfdf7c5cb218bc6bef6ede5a1",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "8b6a88000398431610ba73914e76208c6c836a2fd8e02cdc608c64f67e99ee9b",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 10.390285800000129,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 3.158470392227173,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "81aa778e33091beb5adca8f0e7a872b1a5044a01f7eb6e85bbb992e33dcfa2d8",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 1.6056435108184814,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "d63094501b2178129013c616b56cba0a364736f07df5e7096309a5ce7acf260d",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 1.5338590145111084,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "be222a774cc72007cc75778b06f15e1ec7f692bdfdf7c5cb218bc6bef6ede5a1",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -0.5085622668266296,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "9a256fd813ee4caeabdaced608bbdd59e33856f4005d98c249652497bc7f4727",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -1.1314266920089722,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.005849999994097743,
+                "top_k": 10,
+                "documents": []
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 1.1864963000043645,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "65a36cf60f58981d4548908ac433d523226ede4322289ee9ba732df55187cc9c",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "dffc6ab933e426227ee8c97e6ca8106632f66f0b8fcfc378567527bc177d7db8",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f8fdedf795d295b5012783be03356a9f62260e2826de278649fba5c28787801f",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2d9f37c2a77fd0a28c76bb8ad2acbd4c31eb722098f7d815c6890134d5b4c82b",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2332bca87f5a19592612cf9d99fad943a9a676e4a147ebde8197ce943cf27be5",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8ea30d59d78345ca25216ba3b242c3fbd03eb5c4b30047e8824db1d68f73bdb2",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "00e0f8a03d1c6eeb15d69a4255699799c184c3118945f61e45cd6ecd63fbb619",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1025caa8beb3b968aab272c28725d9e82d0a6e261625c4aca479fd832854c0bc",
+                        "source": "add-memory.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "65c6b3761255442b5c0837bf4e1b9dbc3070cc92225484a5cbd20cc492830fb8",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 3.809999907389283e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "65a36cf60f58981d4548908ac433d523226ede4322289ee9ba732df55187cc9c",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "dffc6ab933e426227ee8c97e6ca8106632f66f0b8fcfc378567527bc177d7db8",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "f8fdedf795d295b5012783be03356a9f62260e2826de278649fba5c28787801f",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "2d9f37c2a77fd0a28c76bb8ad2acbd4c31eb722098f7d815c6890134d5b4c82b",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "2332bca87f5a19592612cf9d99fad943a9a676e4a147ebde8197ce943cf27be5",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "8ea30d59d78345ca25216ba3b242c3fbd03eb5c4b30047e8824db1d68f73bdb2",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "00e0f8a03d1c6eeb15d69a4255699799c184c3118945f61e45cd6ecd63fbb619",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.019466199999442324,
+                "top_k": 10,
+                "documents": []
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 0.40246320000005653,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "0541fb4ddf0925e8341a79c4751b414c018eb87d0e79dd9b5a1063f363ef9bbd",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6f886924f31bb43ce1946a490759e78292504a3616e77faa40e524a5c2c78a1f",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5a57af25ed4da62f7972769d144e54676c0edfca5d6b4385995dbccde1e700b1",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "03bc11f41304b0eeedd6656a838f2b1ad86fe7dd8d3f9b8ba71c3d468bc30793",
+                        "source": "checkpoint-postgres/langgraph/store/postgres/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5b7a9398b2c791feb1cbbd780937f96141eb017332641ad3caa3f07212fb3062",
+                        "source": "checkpoint-postgres/langgraph/store/postgres/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f5c811fa4f546aa7f3052cf2c4ee9f1535e01d8638f2eb273223678b77bbc125",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "20b6537975fb98a52e5c814660c31114741ab59bffa42bc589457eec9e5b0e43",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "dd7700f124a967e2a828af4b4928f2962e4f244c6477c83781622305e46cd2ee",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3a306c274c569968578b4136e4a58b042af6c552724b7b2f2719fc1b8686857b",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "99f960538c6bd6e2b022edd387719609334791b290ae4c9fd20fae06f5f498e9",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 9.790000331122428e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "0541fb4ddf0925e8341a79c4751b414c018eb87d0e79dd9b5a1063f363ef9bbd",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "6f886924f31bb43ce1946a490759e78292504a3616e77faa40e524a5c2c78a1f",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "5a57af25ed4da62f7972769d144e54676c0edfca5d6b4385995dbccde1e700b1",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "03bc11f41304b0eeedd6656a838f2b1ad86fe7dd8d3f9b8ba71c3d468bc30793",
+                        "source": "checkpoint-postgres/langgraph/store/postgres/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "5b7a9398b2c791feb1cbbd780937f96141eb017332641ad3caa3f07212fb3062",
+                        "source": "checkpoint-postgres/langgraph/store/postgres/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "f5c811fa4f546aa7f3052cf2c4ee9f1535e01d8638f2eb273223678b77bbc125",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "20b6537975fb98a52e5c814660c31114741ab59bffa42bc589457eec9e5b0e43",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "dd7700f124a967e2a828af4b4928f2962e4f244c6477c83781622305e46cd2ee",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 12.663267399999313,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "8ce09182a4b31377cdb39c209ce52037c285e223d855aca7fca10a76af701dc7",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 3.026604175567627,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "65a36cf60f58981d4548908ac433d523226ede4322289ee9ba732df55187cc9c",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -1.8429341316223145,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "2332bca87f5a19592612cf9d99fad943a9a676e4a147ebde8197ce943cf27be5",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -4.51753044128418,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "0541fb4ddf0925e8341a79c4751b414c018eb87d0e79dd9b5a1063f363ef9bbd",
+                        "source": "checkpoint/langgraph/store/base/batch.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -4.75559139251709,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "03bc11f41304b0eeedd6656a838f2b1ad86fe7dd8d3f9b8ba71c3d468bc30793",
+                        "source": "checkpoint-postgres/langgraph/store/postgres/aio.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -6.456638336181641,
+                        "rank": 5
+                    }
+                ]
+            }
+        ],
+        "generation_metrics": [
+            {
+                "name": "Initial Generation",
+                "answer": "## Assessment\n\nThe observed duplicate is consistent with the documented checkpointing model. The `process_order` node performs an external side effect directly:\n\n```python\nresult = external_api.process_order(state[\"order_id\"])\n```\n\nThe retrieved documentation recommends placing API calls and other side effects inside LangGraph `task` functions. It also states that when a workflow resumes, completed task results can be replayed from the checkpoint, while a task that started but did not finish may run again.\n\n## How checkpointing and recovery interact\n\n- **Retrieved fact:** Checkpointing provides fault tolerance and allows a graph to restart from the last successful step.\n- **Retrieved fact:** If a node fails during a super-step, writes from other nodes that completed successfully are retained, so those successful nodes are not rerun when execution resumes.\n- **Retrieved fact:** Work that started but did not finish may be executed again during resume.\n- **Inference:** If `external_api.process_order()` completes, but the process fails before LangGraph durably records the node/task result, LangGraph can have no durable evidence that the external operation completed. On recovery, the unfinished work is therefore eligible to run again.\n\nThe external system's first operation may already have succeeded even though the LangGraph step was not durably completed. This creates the duplicate-operation window seen here.\n\n## Exactly-once execution\n\nThe retrieved context does **not** document an exactly-once guarantee for external operations. Its replay behavior instead establishes that unfinished work can be executed again. Therefore, checkpointing should not be treated as making the external API call exactly-once.\n\nIn practical terms, the application must tolerate possible re-execution of an operation whose external effect succeeded before its LangGraph result was checkpointed. This is an inference from the documented resume behavior, not a stated formal delivery guarantee.\n\n## Task boundaries and retries\n\nThe current implementation puts the side effect in a `StateGraph` node rather than in a `task`. That is not a safe durable-execution boundary for this side effect according to the retrieved functional API guidance, which says to encapsulate side effects in tasks so they are handled correctly during checkpointing and resume.\n\nA task boundary improves recovery because the task's result can be checkpointed and replayed after it has completed. However, it does **not** by itself eliminate the failure window between:\n\n1. the external system completing the operation, and\n2. LangGraph durably recording the task result.\n\nThat task may still be executed again if it started but did not finish from LangGraph's perspective.\n\nIf a retry policy is configured, the same issue can also occur within one execution. The retry implementation clears the task's writes before each attempt and invokes the task again after a retryable exception. Consequently, an external operation that succeeded but was followed by an exception can be issued again by the retry attempt. The shown graph does not configure a retry policy, but recovery alone is sufficient to reproduce the problem.\n\n## Recommended design\n\nUse a task for the external call and make the external operation idempotent. For example, use the stable order identifier as an idempotency or deduplication key, if the external API supports that contract:\n\n```python\nfrom langgraph.func import task\n\n\n@task\ndef process_order_task(order_id: str):\n    return external_api.process_order(\n        order_id=order_id,\n        idempotency_key=order_id,\n    )\n\n\ndef process_order(state):\n    result = process_order_task(state[\"order_id\"]).result()\n    return {\"order_result\": result}\n```\n\nThe retrieved context supports the use of `@task`, calling a task from within a `StateGraph`, and retrieving its result with `.result()`. The specific `idempotency_key` parameter and the external API's deduplication behavior are not defined in the retrieved context, so those names are illustrative only and must match the external system's actual API.\n\nThe required application-level properties are:\n\n1. **Stable operation identity:** Derive one operation key for the logical order operation, such as the order ID or a separately generated durable operation ID.\n2. **External deduplication:** Have the external service atomically recognize a repeated key and return the existing result instead of applying the operation twice.\n3. **Task boundary:** Place the API call inside a LangGraph task so completed task results participate in durable execution and can be replayed.\n4. **Safe retries:** Assume both retry attempts and recovery can repeat unfinished work. The operation must therefore be safe to invoke more than once with the same key.\n5. **Idempotent local handling:** Make any local processing of the returned result safe to repeat as well, especially if it writes data or sends further notifications.\n\nThe goal is not to prevent every re-invocation. The goal is to ensure that a re-invocation is either harmless or resolves to the already-completed external operation. Thus completed work remains recoverable through checkpointing, while work that was interrupted or whose result was not durably recorded remains safe to retry.",
+                "answer_length": 5288,
+                "prompt_tokens": 7065,
+                "completion_tokens": 1685,
+                "total_tokens": 8750,
+                "estimated_cost": 0.003435,
+                "generation_latency": 16.30025150000438,
+                "is_complete": false,
+                "round_number": null,
+                "gaps_detected": [
+                    "Formal exactly-once guarantee for external side effects",
+                    "External API idempotency and deduplication contract"
+                ]
+            },
+            {
+                "name": "Gap Generation Round 1",
+                "answer": "## Assessment\n\nThe architecture does **not** provide exactly-once execution of `external_api.process_order(...)`.\n\n### Retrieved facts\n\n- Checkpoints persist graph state and can restore a thread later.\n- LangGraph applies the latest graph to both new threads and resumed threads.\n- Plain Graph API nodes can be re-executed from the start when a run resumes. The documentation therefore requires node side effects to be idempotent.\n- For the Functional API, completed task results can be replayed from the checkpoint, but a task that started and did not finish may run again when the workflow resumes.\n- Checkpointing supports fault tolerance, and pending writes from other nodes that completed in a failed super-step can be restored without rerunning those successful nodes.\n- The retry implementation clears `task.writes` before each attempt and invokes the task again when the retry policy says the exception is retryable. Thus, retries can execute the task body more than once.\n\n### What happens with the shown node\n\nThe external operation is executed directly inside a Graph API node:\n\n```python\ndef process_order(state):\n    result = external_api.process_order(state[\"order_id\"])\n    return {\"order_result\": result}\n```\n\nThe operation and the returned state update are separate effects. If the external system completes the operation, but the process fails before the node's result is durably recorded in a checkpoint, the checkpoint does not contain evidence that the operation completed. On recovery, the node can run again from its beginning, causing the duplicate observed here. This timing relationship is an inference from the documented node re-execution and checkpoint replay behavior; the retrieved context does not specify the exact atomicity boundary between the external API call and checkpoint persistence.\n\nMoving the call into a task is still recommended because the Functional API documentation says to put API calls and other side effects inside tasks so completed task results can be checkpointed and replayed rather than repeating the work. However, a task boundary does **not** make the external call exactly-once: if the external call succeeds but the task result is not durably recorded, the task may execute again. Retries can also invoke the task body again after a failure.\n\n## Recommended design\n\nUse a task boundary together with an idempotent external operation. For example, the application can use an idempotency key derived from the stable order identifier, if the external service supports that behavior:\n\n```python\nfrom langgraph.func import task\n\n\n@task\ndef process_order_task(order_id: str):\n    return external_api.process_order(\n        order_id=order_id,\n        idempotency_key=order_id,\n    )\n\n\ndef process_order(state):\n    result = process_order_task(state[\"order_id\"]).result()\n    return {\"order_result\": result}\n```\n\nThe retrieved context supports the task boundary and the requirement that task inputs and outputs be serializable when checkpointing is enabled. The particular `idempotency_key` parameter shown above is illustrative only; the retrieved context does not document an API for `external_api`, so the application must adapt this to the external system's actual interface.\n\nThe external operation should make repeated requests with the same order key produce the same logical result rather than create another operation. The documentation specifically recommends idempotency keys, upserts, or read-before-write checks for effects that may be re-executed.\n\nA robust recovery pattern is therefore:\n\n1. Derive a stable operation key from the order, such as `order_id`.\n2. Execute the external call inside a task.\n3. Configure retries only when repeating that task is safe.\n4. Make the external request idempotent, or check the external system for an existing operation before creating one.\n5. Store the returned result in graph state so it can be recovered from the checkpoint once the task and node complete durably.\n\n## Exactly-once versus safe recovery\n\n- **Exactly once:** Not guaranteed by LangGraph checkpointing. The context documents replay and re-execution of unfinished work, and it does not document an exactly-once guarantee for external side effects.\n- **Completed work:** A completed task result can be replayed from the checkpoint. Successful node writes in a failed super-step can also be restored when they were actually recorded as pending checkpoint writes.\n- **Unfinished or ambiguously completed work:** May execute again. This includes a task that started but did not finish, a node resumed from before its result was checkpointed, and retry attempts selected by a retry policy.\n- **Duplicate prevention:** Must be provided by the application and/or the external service through idempotency or deduplication. Checkpointing determines what LangGraph can resume; it cannot atomically commit an arbitrary external operation and the LangGraph checkpoint based on the retrieved context.",
+                "answer_length": 4961,
+                "prompt_tokens": 9109,
+                "completion_tokens": 1572,
+                "total_tokens": 10681,
+                "estimated_cost": 0.0037082,
+                "generation_latency": 16.202137699998275,
+                "is_complete": false,
+                "round_number": 1,
+                "gaps_detected": [
+                    "Atomicity boundary between external_api.process_order completion and checkpoint persistence",
+                    "Idempotency and deduplication behavior supported by the external_api.process_order service"
+                ]
+            },
+            {
+                "name": "Gap Generation Round 2",
+                "answer": "## Retrieved facts\n\n- LangGraph checkpoints persist a thread's graph state and can restore it later. Checkpointing supports fault tolerance and recovery from the last successful step.\n- For a failed super-step, LangGraph stores pending writes from other nodes that completed successfully. When execution resumes, those successful nodes are not re-run.\n- Plain Graph API nodes re-run from the start of the node function when a run resumes. Therefore, in the supplied code, `process_order` can call `external_api.process_order(...)` again if the node's result was not durably recorded before the failure.\n- The documentation explicitly recommends making node side effects idempotent because node re-execution can otherwise corrupt state or create duplicate database rows.\n- Functional API tasks have more precise replay behavior: completed task results can be restored from the checkpoint, while a task that started but did not finish may run again after resume. The documentation therefore also requires task side effects to be idempotent.\n- The retry implementation clears `task.writes` before each attempt and can execute a task again after a retryable exception. Thus, retries are another situation in which an external side effect may be performed more than once unless the operation is idempotent.\n- A numeric task timeout or a `TimeoutPolicy` applies to each task attempt. The retrieved context states that timeouts are supported for async tasks, not sync tasks, but it does not establish a timeout configuration for the supplied synchronous graph node.\n- With `\"sync\"` durability, LangGraph persists each checkpoint before starting the next step. With `\"async\"`, persistence occurs asynchronously while the next step executes, so a process crash can prevent a checkpoint from being written. With `\"exit\"`, intermediate state is not saved and mid-execution recovery is unavailable after a system failure.\n\n## Application of those facts to the code\n\nThe external call occurs directly inside a plain Graph API node:\n\n```python\nresult = external_api.process_order(state[\"order_id\"])\n```\n\nThe call and the checkpoint recording of the node's returned state are separate operations. If the external system commits the order operation and the process fails before LangGraph durably records `{\"order_result\": result}`, LangGraph cannot infer that the external operation already succeeded. On recovery, the node is eligible to run from its beginning, so the external call can be issued again.\n\nThis is an inference from the documented node re-execution and checkpoint behavior: checkpointing does **not** provide exactly-once execution of an arbitrary external operation. It provides recovery of persisted graph state and completed work that was successfully recorded. It cannot make an external side effect and checkpoint persistence one atomic transaction unless the retrieved context specifically establishes such an integration; it does not.\n\nThe same issue remains if the call is moved into a `task`. A task boundary improves durable replay because a completed task result can be restored, but an operation that completes externally and fails before the task result is checkpointed is still an unfinished task from LangGraph's perspective and may be executed again. A retry can likewise repeat the operation.\n\n## Recommended design\n\nMake the external operation idempotent using an application-level idempotency key derived from the logical operation, such as the order ID, if the external system supports that contract. The external service should record the key and return the existing result when it receives the same key again, rather than creating a second operation. An equivalent design is an atomic upsert or a read-before-write check in the external system, provided that the check and write cannot race.\n\nConceptually, the operation should behave like:\n\n```python\n# The exact external API signature is application-specific.\n# The external service must enforce uniqueness for this operation key.\nresult = external_api.process_order(\n    order_id=state[\"order_id\"],\n    idempotency_key=f\"process-order:{state['order_id']}\",\n)\nreturn {\"order_result\": result}\n```\n\nThe retrieved context does not document an `idempotency_key` parameter for `external_api.process_order`; the example is therefore an application-level pattern, not a LangGraph API claim.\n\nFor the Functional API, the documentation recommends placing API calls and other side effects inside tasks, so completed task results can be replayed from checkpoints instead of repeating completed work. A task-based version would still require the external operation to be idempotent because unfinished tasks and retry attempts may execute again.\n\nFor a long-running operation, the external system should also expose a way to query operation status by the same idempotency key, or otherwise support resumable/polling semantics. Then the workflow can submit the operation once, safely retry submission with the same key, and retrieve the already-created result after recovery. The retrieved context does not specify an API for such polling, so the exact implementation is application-specific.\n\nFinally, choose a durability mode according to the failure guarantee required. `\"sync\"` reduces the window in which a completed graph step lacks a persisted checkpoint, but it still does not atomically couple the external side effect with checkpoint storage. It therefore improves checkpoint durability without establishing exactly-once external execution.\n\n## Conclusion\n\nThe observed duplicate is consistent with the documented behavior and does not indicate that checkpointing is malfunctioning. The external operation completed, but its graph result was not durably recorded; the plain node then ran again during recovery. The safe model is **at-least-once execution for unfinished work**, with persisted results allowing completed work to be skipped or replayed. Prevent duplicates at the application/external-system boundary using idempotency keys, atomic upserts, or equivalent deduplication, and place side effects in task boundaries when using the Functional API so completed results can be replayed efficiently.",
+                "answer_length": 6175,
+                "prompt_tokens": 10682,
+                "completion_tokens": 1675,
+                "total_tokens": 12357,
+                "estimated_cost": 0.0041464,
+                "generation_latency": 17.426402800003416,
+                "is_complete": false,
+                "round_number": 2,
+                "gaps_detected": [
+                    "Whether the supplied graph or checkpointer is configured with a specific durability mode",
+                    "Whether external_api.process_order supports idempotency keys, status lookup, or atomic deduplication",
+                    "Whether the graph has a node-level retry policy configured"
+                ]
+            }
+        ],
+        "judge_evaluation": {
+            "correctness": {
+                "score": 5.0,
+                "justification": "The answer accurately explains how LangGraph's checkpointing, task boundaries, durable execution, retries, and external side effects interact. It correctly concludes that checkpointing does not provide exactly-once execution for external operations and provides appropriate design recommendations based on the retrieved context."
+            },
+            "groundedness": {
+                "score": 5.0,
+                "justification": "All significant technical claims, explanations, and recommendations in the answer are directly supported by the retrieved context. The answer explicitly clarifies when a recommendation is an application-level pattern rather than a LangGraph API claim."
+            },
+            "completeness": {
+                "score": 5.0,
+                "justification": "The answer thoroughly addresses all aspects of the user's question, covering the interaction of all specified concepts, explaining why exactly-once execution is not guaranteed, when work can be re-executed, and providing a comprehensive design to prevent duplicate side effects while allowing recovery. All expected concepts are covered."
+            },
+            "hallucination": {
+                "score": 0.0,
+                "justification": "There are no unsupported or fabricated technical claims. The answer is careful to distinguish between LangGraph features and application-level patterns not explicitly detailed in the context."
+            },
+            "missing_concepts": [],
+            "unsupported_claims": []
+        },
+        "overall_metrics": {
+            "total_latency": 113.97304879999865,
+            "total_cost": 0.0230787,
+            "recall_at_k": 1.0,
+            "precision_at_k": 0.1111111111111111,
+            "hit_rate": 1.0,
+            "mrr": 0.16666666666666666
+        }
+    }
+]

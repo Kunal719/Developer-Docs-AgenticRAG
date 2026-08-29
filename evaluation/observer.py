@@ -1,4 +1,5 @@
 from evaluation.models import PipelineStage, RetrievedDocument, GenerationMetrics, RouterMetrics
+from models.retrieval_plan import RetrievalPlan
 
 class PipelineObserver():
     def __init__(self):
@@ -6,6 +7,7 @@ class PipelineObserver():
         self._generation_metrics: list[GenerationMetrics] = []
         self._context = None
         self._router_metrics: RouterMetrics | None = None
+        self._retrieval_plan: RetrievalPlan | None = None
 
 
     def record_stage(self, name: str, latency: float, top_k: int, documents: list[RetrievedDocument]) -> None:
@@ -49,6 +51,9 @@ class PipelineObserver():
             router_latency=router_latency
         )
 
+    def record_retrieval_plan(self, retrieval_plan: RetrievalPlan) -> None:
+        self._retrieval_plan = retrieval_plan
+
     def record_context(self, context: str) -> None:
         self._context = context
 
@@ -60,6 +65,9 @@ class PipelineObserver():
 
     def get_router_metrics(self) -> RouterMetrics:
         return self._router_metrics
+
+    def get_retrieval_plan(self) -> RetrievalPlan | None:
+        return self._retrieval_plan
     
     def get_context(self) -> str:
         return self._context
@@ -72,6 +80,7 @@ class PipelineObserver():
         self._generation_metrics = []
         self._context = None
         self._router_metrics = None
+        self._retrieval_plan = None
 
     
         

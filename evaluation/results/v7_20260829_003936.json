@@ -1,0 +1,1170 @@
+[
+    {
+        "question": {
+            "question": "How would you build a LangGraph workflow that pauses for human approval before executing a tool call and then resumes execution later?",
+            "code_snippet": null,
+            "error": null,
+            "logs": null,
+            "observed_behavior": null,
+            "expected_behavior": null,
+            "id": 21,
+            "category": "reasoning",
+            "intent": "workflow_design",
+            "difficulty": "hard",
+            "expected_files": [
+                "interrupts.mdx",
+                "persistence.mdx",
+                "checkpointers.mdx",
+                "workflows-agents.mdx",
+                "prebuilt/langgraph/prebuilt/tool_node.py",
+                "checkpoint/langgraph/checkpoint/base/__init__.py"
+            ],
+            "concepts": [
+                "interrupts",
+                "human-in-the-loop",
+                "checkpointing",
+                "ToolNode",
+                "tool execution",
+                "workflow design"
+            ],
+            "tags": null,
+            "evidence": null,
+            "queries": null
+        },
+        "final_answer": "Use a checkpointer, put `interrupt()` inside the tool, and resume the same thread with `Command(resume=...)`.\n\n```python\nfrom langchain.tools import tool\nfrom langgraph.checkpoint.memory import InMemorySaver\nfrom langgraph.types import Command, interrupt\n\n@tool\ndef send_email(to: str, subject: str, body: str):\n    \"\"\"Send an email to a recipient.\"\"\"\n    approval = interrupt({\n        \"action\": \"send_email\",\n        \"to\": to,\n        \"subject\": subject,\n        \"body\": body,\n        \"message\": \"Approve sending this email?\",\n    })\n\n    if approval.get(\"action\") == \"approve\":\n        # A resume value can override the original tool arguments.\n        final_to = approval.get(\"to\", to)\n        final_subject = approval.get(\"subject\", subject)\n        final_body = approval.get(\"body\", body)\n        return f\"Email sent to {final_to} with subject '{final_subject}'\"\n\n    return \"Email cancelled by user\"\n```\n\nRegister `send_email` as a tool in the graph or agent that makes the tool call, and compile that graph with a checkpointer:\n\n```python\ncheckpointer = InMemorySaver()\ngraph = builder.compile(checkpointer=checkpointer)\n\nconfig = {\n    \"configurable\": {\n        \"thread_id\": \"review-42\",\n    }\n}\n\n# Start execution. The tool's interrupt pauses the run before approval.\nfor chunk in graph.stream(initial_input, config):\n    print(chunk)\n\n# After reviewing the interrupt payload, resume the same thread.\nfor chunk in graph.stream(\n    Command(resume={\"action\": \"approve\"}),\n    config,\n):\n    print(chunk)\n```\n\n**Retrieved facts:** `interrupt()` pauses graph execution and surfaces its payload to the client. A checkpointer is required, and the configuration must include a thread ID so the runtime can resume the saved state. The tool-interrupt pattern pauses before the tool action and allows the resume value to approve, edit, or cancel the action. The documented examples resume with `Command(resume=...)` using the same configuration.\n\n**Runtime detail from the implementation:** on the first invocation, `interrupt()` raises `GraphInterrupt`. When execution resumes, the node is re-executed from its start; previously supplied resume values are returned at the corresponding interrupt positions. Therefore, side effects that occur before an interrupt should be avoided or encapsulated in a task, because the surrounding logic may run again on resumption.\n\nUse a durable checkpointer for production according to the documentation. The exact agent/tool-routing nodes are not shown in the retrieved snippets, but the approval and resumption mechanism above is the documented pattern.",
+        "experiment_metadata": {
+            "version": "v7",
+            "timestamp": "2026-08-29T00:39:36.127526",
+            "embedding_model": "text-embedding-3-small",
+            "llm_provider": "openai",
+            "llm": "gpt-5.6-luna",
+            "chunk_size": 1200,
+            "chunk_overlap": 200,
+            "dense_top_k": 10,
+            "bm25_top_k": 10,
+            "hybrid_top_k": 16,
+            "rrf_k": 60,
+            "reranker_top_k": 13,
+            "reranker_name": "BAAI/bge-reranker-base",
+            "judge_model": "gemini-2.5-flash",
+            "judge_llm_provider": "google_genai",
+            "router_llm": "gpt-5.6-luna",
+            "router_llm_provider": "openai"
+        },
+        "router_metrics": {
+            "name": "Query Router",
+            "prompt_tokens": 1495,
+            "completion_tokens": 327,
+            "total_tokens": 1822,
+            "estimated_cost": 0.0006914,
+            "router_latency": 8.847075500001665
+        },
+        "retrieval_plan": {
+            "retrieval_mode": "combined_query",
+            "reasoning": "The question combines human-in-the-loop interruption, approval before a tool execution, and resuming a paused workflow. These related usage concepts should be retrieved together from documentation.",
+            "sub_queries": [
+                "how to pause a LangGraph workflow for human approval before a tool call",
+                "how to interrupt execution and provide the approval request to a human",
+                "how to resume a paused LangGraph workflow after approval",
+                "how to conditionally execute or reject a tool call based on human input"
+            ],
+            "combined_query": "How would you build a LangGraph workflow that pauses for human approval before executing a tool call and then resumes execution later? LangGraph human-in-the-loop workflow, interrupt before tool execution, approval request, resume a paused graph with human input, conditionally execute or reject a tool call, checkpointing and thread identity for resumption",
+            "metadata_filters": {
+                "corpus": "documentation",
+                "module_names": null,
+                "class_names": null,
+                "function_names": null,
+                "category": null
+            }
+        },
+        "pipeline_stages": [
+            {
+                "name": "Dense Retriever",
+                "latency": 0.8603914999985136,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "e3afe22adb0d125099292936116578ba10cd39ed30ce1afd2a557e256c5cb3d6",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d85be7bb1d6a05ccab7c113c5caffe550fe880f36c2b3e6d6faba619875ddc66",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "26fb95d1b712a48e63695e658f97f691bbd39ee0167aa9146702213acef6f98e",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "94073545d26c5822a7648b7b6b3825702fe0324543b689deeace68ebfadf2d61",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "702a65080508fbec57dec7bb8bb5ad69dfa68d412af76ad7e88034975fcfc2fe",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9ba0869a56159cb116f1663797eb53ea5fa2c78e3282f1d04fa8a2289961806b",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d63094501b2178129013c616b56cba0a364736f07df5e7096309a5ce7acf260d",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "91298ccab2c05907ac9933c8e19d65e65e0d86afd0a947aaba3b4087bc6e41e6",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8f475403e6705459a9380ab2bf4c6ba91212a591c0e20762fc633780de65d98e",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "19e00608bd109616a9afeb25e41c3ab9c24f29c37125e90a258321d6db211996",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.02120029999059625,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "ce93c5e3dba9477f512c4b1051486c4a21b2d8171316cce2cd33a426dfd76d78",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "600c7bd874ad63689c87247377c602a6e81387aa682b1a0ac7f8f19c79654b65",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d85be7bb1d6a05ccab7c113c5caffe550fe880f36c2b3e6d6faba619875ddc66",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "19e00608bd109616a9afeb25e41c3ab9c24f29c37125e90a258321d6db211996",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "adb6f6f824d67c0ad72d54213f2f78ebc67bd5809db5f111f3cead94e080f819",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3d462977d0738d40bbdb4cc92da2ed18f5f2b82774ecf30501885506a9338aea",
+                        "source": "event-streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1d592f50c93d6576cc526d300890dadfcef0f7bc6a141d2beb0f686e5f34f985",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "90a4811d7a2d2cc01383430ce22b232a8b1f4a80af7fdd00f10d910aa91db3a3",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "94125a5d73876ee22fa626fd39dc366002986497a5a41d499044f83f6f43a87c",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "395a763b5bd3661c3c35114e352639a17414d6843175cad4dc52d24e98d481d2",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 5.610000516753644e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "d85be7bb1d6a05ccab7c113c5caffe550fe880f36c2b3e6d6faba619875ddc66",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.03200204813108039,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "19e00608bd109616a9afeb25e41c3ab9c24f29c37125e90a258321d6db211996",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.029910714285714284,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "e3afe22adb0d125099292936116578ba10cd39ed30ce1afd2a557e256c5cb3d6",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "ce93c5e3dba9477f512c4b1051486c4a21b2d8171316cce2cd33a426dfd76d78",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "600c7bd874ad63689c87247377c602a6e81387aa682b1a0ac7f8f19c79654b65",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "26fb95d1b712a48e63695e658f97f691bbd39ee0167aa9146702213acef6f98e",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "94073545d26c5822a7648b7b6b3825702fe0324543b689deeace68ebfadf2d61",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "702a65080508fbec57dec7bb8bb5ad69dfa68d412af76ad7e88034975fcfc2fe",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "adb6f6f824d67c0ad72d54213f2f78ebc67bd5809db5f111f3cead94e080f819",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "9ba0869a56159cb116f1663797eb53ea5fa2c78e3282f1d04fa8a2289961806b",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "3d462977d0738d40bbdb4cc92da2ed18f5f2b82774ecf30501885506a9338aea",
+                        "source": "event-streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "d63094501b2178129013c616b56cba0a364736f07df5e7096309a5ce7acf260d",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 13.002651700007846,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "600c7bd874ad63689c87247377c602a6e81387aa682b1a0ac7f8f19c79654b65",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9983744621276855,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "d85be7bb1d6a05ccab7c113c5caffe550fe880f36c2b3e6d6faba619875ddc66",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9949600696563721,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "ce93c5e3dba9477f512c4b1051486c4a21b2d8171316cce2cd33a426dfd76d78",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9929373860359192,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "19e00608bd109616a9afeb25e41c3ab9c24f29c37125e90a258321d6db211996",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9832915663719177,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "26fb95d1b712a48e63695e658f97f691bbd39ee0167aa9146702213acef6f98e",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9821544885635376,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "adb6f6f824d67c0ad72d54213f2f78ebc67bd5809db5f111f3cead94e080f819",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9810551404953003,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "3d462977d0738d40bbdb4cc92da2ed18f5f2b82774ecf30501885506a9338aea",
+                        "source": "event-streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.8440295457839966,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "e3afe22adb0d125099292936116578ba10cd39ed30ce1afd2a557e256c5cb3d6",
+                        "source": "overview.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.7739077806472778,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "d63094501b2178129013c616b56cba0a364736f07df5e7096309a5ce7acf260d",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.06258779764175415,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "94073545d26c5822a7648b7b6b3825702fe0324543b689deeace68ebfadf2d61",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.03157816082239151,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "702a65080508fbec57dec7bb8bb5ad69dfa68d412af76ad7e88034975fcfc2fe",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.013744375668466091,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "9ba0869a56159cb116f1663797eb53ea5fa2c78e3282f1d04fa8a2289961806b",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.008271911181509495,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 0.7058087000041269,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "6dbffa1f9e85a6e752fc34180df23f2a8a17ad4b05d985cd11549c7d93a9c5ec",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "adb6f6f824d67c0ad72d54213f2f78ebc67bd5809db5f111f3cead94e080f819",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f87e668069f78fd29d5d8a834dc75e10170b6a7b07ac84c0c93fd1f744554fac",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0d34974dbbcfb4077666fb9dfaf486347fbe4cf887e823b7059e20a4b4f54c4b",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "395a763b5bd3661c3c35114e352639a17414d6843175cad4dc52d24e98d481d2",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f017d9b23b14433112e13c53d63235d9aa3395d18cdf20e61c42dcd63bcc58a6",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "82197118e5bdc339772ae0ab4599d8dc434ab37a3356aec4d830ee446e829216",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c5b621426e58e7798c1344892fa347791882cf783dee1d1ba6a84516a5400494",
+                        "source": "functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4671d1dd34a4b500477ccf0713ffd7c171a1a08de8481550f53175c4494d0512",
+                        "source": "errors/INVALID_CHAT_HISTORY.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a115ec061e3a608db0310206d250a0693243e84395b60388f5bf68ae86187164",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.008167599997250363,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "c4740ad5925bc3d6a3f138d10438e3cb22a9a65ca3bc3ede727192420da84f37",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "395a763b5bd3661c3c35114e352639a17414d6843175cad4dc52d24e98d481d2",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ce93c5e3dba9477f512c4b1051486c4a21b2d8171316cce2cd33a426dfd76d78",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "57022b559a21f53efb721e950ec8285c3bfd9efa5d6882085b841eaaa612f241",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c2180d19cf14f4f36e3796cdf9d931f81d567e9a3c44f8fb20353db7a3fbb23a",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f221cad6205a00359bf06fc5713924d0b4786dfd9b7bc136129547da638f87b1",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "029f790b5b6ee34508345ae907b83c8b387b24df639ad3f17be4fec362f3b85a",
+                        "source": "studio.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a115ec061e3a608db0310206d250a0693243e84395b60388f5bf68ae86187164",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "19e00608bd109616a9afeb25e41c3ab9c24f29c37125e90a258321d6db211996",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "adb6f6f824d67c0ad72d54213f2f78ebc67bd5809db5f111f3cead94e080f819",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 8.510000770911574e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "395a763b5bd3661c3c35114e352639a17414d6843175cad4dc52d24e98d481d2",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.0315136476426799,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "adb6f6f824d67c0ad72d54213f2f78ebc67bd5809db5f111f3cead94e080f819",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.0304147465437788,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "a115ec061e3a608db0310206d250a0693243e84395b60388f5bf68ae86187164",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.028991596638655463,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "6dbffa1f9e85a6e752fc34180df23f2a8a17ad4b05d985cd11549c7d93a9c5ec",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "c4740ad5925bc3d6a3f138d10438e3cb22a9a65ca3bc3ede727192420da84f37",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "f87e668069f78fd29d5d8a834dc75e10170b6a7b07ac84c0c93fd1f744554fac",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "ce93c5e3dba9477f512c4b1051486c4a21b2d8171316cce2cd33a426dfd76d78",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "0d34974dbbcfb4077666fb9dfaf486347fbe4cf887e823b7059e20a4b4f54c4b",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "57022b559a21f53efb721e950ec8285c3bfd9efa5d6882085b841eaaa612f241",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "c2180d19cf14f4f36e3796cdf9d931f81d567e9a3c44f8fb20353db7a3fbb23a",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "f017d9b23b14433112e13c53d63235d9aa3395d18cdf20e61c42dcd63bcc58a6",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "f221cad6205a00359bf06fc5713924d0b4786dfd9b7bc136129547da638f87b1",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 12.791556999989552,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "6dbffa1f9e85a6e752fc34180df23f2a8a17ad4b05d985cd11549c7d93a9c5ec",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9983173608779907,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9963687658309937,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "adb6f6f824d67c0ad72d54213f2f78ebc67bd5809db5f111f3cead94e080f819",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9961662292480469,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "0d34974dbbcfb4077666fb9dfaf486347fbe4cf887e823b7059e20a4b4f54c4b",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9957107305526733,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "f87e668069f78fd29d5d8a834dc75e10170b6a7b07ac84c0c93fd1f744554fac",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9947740435600281,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 1.0587960999982897,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "8f475403e6705459a9380ab2bf4c6ba91212a591c0e20762fc633780de65d98e",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "da6084c08179610d4da6877f41ba001d07c6665c918fec95c2b87ba2c49363bc",
+                        "source": "test.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ea5c6eb648b54eff22b11ef6a604cce951ece055230ac419d966e8b495dc3d19",
+                        "source": "event-streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4d087849beab0130831d0adb6787fd59fd327efc0e8ba4c0128ba262a9ce9299",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a6821e077250acfdbc60e79fcbd05ab947ae3c45412d01109b0b6f32998eee12",
+                        "source": "add-memory.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "140daae346c33c9221b5291a401b33d795fecbfa5cd945bc8bdcc3ec014353e8",
+                        "source": "persistence.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "e3bf624f1595513672b267c33a14e4170e303dee7b4900a947f7c09f91edb874",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a551893b5e80e94e3c3b777e325cfc6501ce689cd3b45f9087753a9dc923cb6d",
+                        "source": "add-memory.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f2cb0fb986f47ae8351eb2ab7c2e9e03977a6f4907374ee64f55b00ac6888ff5",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "fbc462fe97dc35329cca0ee1067cb3e5f9a30bbaf1d0a08aa6a08a3e5d37fc86",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.0035910000005969778,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "d65e7c06c96cb49adaf01a383a3b242f50c3a91533631c9559ed3456122ef17f",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6106a83620b39f33019e062353c8ae708910da7256284d48bdf1f45aee9de9c2",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8638fa2654eb77b960500778af1043aa243ac105e5b04fc16c9c8ca6f80da09d",
+                        "source": "test.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d85be7bb1d6a05ccab7c113c5caffe550fe880f36c2b3e6d6faba619875ddc66",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ce93c5e3dba9477f512c4b1051486c4a21b2d8171316cce2cd33a426dfd76d78",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6e20316a5fd875bdc2d76fb99e9cda267e1a2e5a5dddaba185ecc65a82b918cc",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9f56fe0a097c90c799cdd8d20d4c37cb3e94656a45c3ef25ffe50ffeaf83d382",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "da538110577ab1273b633fc8845d141bdd7a6d2575a27ef921fde640b67c0a40",
+                        "source": "local-server.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c98e0301ee35658d76c1fa7c4acda1435ef1b6d129c73f5fc58e27abc12c701f",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "638a99a6ef76f7f954f94505272086e3313bab05f80d133a62eac6dcb10f8081",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.389999958220869e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "8f475403e6705459a9380ab2bf4c6ba91212a591c0e20762fc633780de65d98e",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "d65e7c06c96cb49adaf01a383a3b242f50c3a91533631c9559ed3456122ef17f",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "da6084c08179610d4da6877f41ba001d07c6665c918fec95c2b87ba2c49363bc",
+                        "source": "test.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "6106a83620b39f33019e062353c8ae708910da7256284d48bdf1f45aee9de9c2",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "ea5c6eb648b54eff22b11ef6a604cce951ece055230ac419d966e8b495dc3d19",
+                        "source": "event-streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "8638fa2654eb77b960500778af1043aa243ac105e5b04fc16c9c8ca6f80da09d",
+                        "source": "test.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "4d087849beab0130831d0adb6787fd59fd327efc0e8ba4c0128ba262a9ce9299",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "d85be7bb1d6a05ccab7c113c5caffe550fe880f36c2b3e6d6faba619875ddc66",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "a6821e077250acfdbc60e79fcbd05ab947ae3c45412d01109b0b6f32998eee12",
+                        "source": "add-memory.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "ce93c5e3dba9477f512c4b1051486c4a21b2d8171316cce2cd33a426dfd76d78",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "140daae346c33c9221b5291a401b33d795fecbfa5cd945bc8bdcc3ec014353e8",
+                        "source": "persistence.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "6e20316a5fd875bdc2d76fb99e9cda267e1a2e5a5dddaba185ecc65a82b918cc",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 9.432005599999684,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "d85be7bb1d6a05ccab7c113c5caffe550fe880f36c2b3e6d6faba619875ddc66",
+                        "source": "sql-agent.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9801402688026428,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "d65e7c06c96cb49adaf01a383a3b242f50c3a91533631c9559ed3456122ef17f",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9466249942779541,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "6e20316a5fd875bdc2d76fb99e9cda267e1a2e5a5dddaba185ecc65a82b918cc",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.897423505783081,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "8638fa2654eb77b960500778af1043aa243ac105e5b04fc16c9c8ca6f80da09d",
+                        "source": "test.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.8529910445213318,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "a6821e077250acfdbc60e79fcbd05ab947ae3c45412d01109b0b6f32998eee12",
+                        "source": "add-memory.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.8204577565193176,
+                        "rank": 5
+                    }
+                ]
+            }
+        ],
+        "generation_metrics": [
+            {
+                "name": "Initial Generation",
+                "answer": "Use a checkpointer and a stable `thread_id`, then call `interrupt()` at the point where approval is required. For a tool-specific review, the documentation describes placing the interrupt directly inside the tool function so the tool pauses before its action executes.\n\n```python\nfrom langchain.tools import tool\nfrom langgraph.types import interrupt\n\n@tool\ndef send_email(to: str, subject: str, body: str):\n    \"\"\"Send an email to a recipient.\"\"\"\n    review = interrupt({\n        \"action\": \"send_email\",\n        \"to\": to,\n        \"subject\": subject,\n        \"body\": body,\n    })\n\n    # Retrieved context supports pausing for review here, but does not\n    # provide the complete tool-body implementation.\n    if review.get(\"approved\"):\n        # Perform the actual email operation here.\n        return \"Email sent\"\n\n    return \"Email not sent\"\n```\n\nThe workflow should be compiled with a checkpointer. Invoke it with a thread ID so LangGraph can persist the paused state:\n\n```python\ncheckpointer = ...  # a configured checkpointer\n# Compile the graph or workflow with this checkpointer.\n# Invoke it with: {\"configurable\": {\"thread_id\": \"review-42\"}}\n```\n\nWhen execution reaches `interrupt()`, LangGraph saves the current graph state and waits. The caller can inspect the interrupt payload and then resume the same thread with a `Command` containing the human response:\n\n```python\nconfig = {\"configurable\": {\"thread_id\": \"review-42\"}}\n\n# Initial invocation pauses at the interrupt.\nresult = graph.invoke(initial_input, config)\n\n# Later, resume the same persisted execution.\nfinal_result = graph.invoke(\n    Command(resume={\"approved\": True}),\n    config,\n)\n```\n\nThe retrieved documentation establishes these requirements:\n\n- A checkpointer is required to persist graph state across the pause.\n- A `thread_id` identifies the persisted execution; reusing it resumes the same checkpoint, while a new value starts a new thread.\n- `interrupt()` pauses execution and returns its value to the caller.\n- Resuming with `Command(resume=...)` supplies the human response at the point where `interrupt()` was called.\n- An interrupt can be placed directly inside a tool to allow the tool call to be reviewed and edited before execution.\n\nThe exact checkpointer construction, the complete tool implementation, and the precise graph node/tool-binding setup are not included in the retrieved context. Those details therefore cannot be specified as documented facts here.",
+                "answer_length": 2453,
+                "prompt_tokens": 4184,
+                "completion_tokens": 976,
+                "total_tokens": 5160,
+                "estimated_cost": 0.002008,
+                "generation_latency": 12.211428599999635,
+                "is_complete": false,
+                "round_number": null,
+                "gaps_detected": [
+                    "Complete Python tool-interrupt implementation and tool execution body",
+                    "Python checkpointer construction and graph tool-binding setup"
+                ]
+            },
+            {
+                "name": "Gap Generation Round 1",
+                "answer": "Use a checkpointer, put `interrupt()` inside the tool, and resume the same thread with `Command(resume=...)`.\n\n```python\nfrom langchain.tools import tool\nfrom langgraph.checkpoint.memory import InMemorySaver\nfrom langgraph.types import Command, interrupt\n\n@tool\ndef send_email(to: str, subject: str, body: str):\n    \"\"\"Send an email to a recipient.\"\"\"\n    approval = interrupt({\n        \"action\": \"send_email\",\n        \"to\": to,\n        \"subject\": subject,\n        \"body\": body,\n        \"message\": \"Approve sending this email?\",\n    })\n\n    if approval.get(\"action\") == \"approve\":\n        # A resume value can override the original tool arguments.\n        final_to = approval.get(\"to\", to)\n        final_subject = approval.get(\"subject\", subject)\n        final_body = approval.get(\"body\", body)\n        return f\"Email sent to {final_to} with subject '{final_subject}'\"\n\n    return \"Email cancelled by user\"\n```\n\nRegister `send_email` as a tool in the graph or agent that makes the tool call, and compile that graph with a checkpointer:\n\n```python\ncheckpointer = InMemorySaver()\ngraph = builder.compile(checkpointer=checkpointer)\n\nconfig = {\n    \"configurable\": {\n        \"thread_id\": \"review-42\",\n    }\n}\n\n# Start execution. The tool's interrupt pauses the run before approval.\nfor chunk in graph.stream(initial_input, config):\n    print(chunk)\n\n# After reviewing the interrupt payload, resume the same thread.\nfor chunk in graph.stream(\n    Command(resume={\"action\": \"approve\"}),\n    config,\n):\n    print(chunk)\n```\n\n**Retrieved facts:** `interrupt()` pauses graph execution and surfaces its payload to the client. A checkpointer is required, and the configuration must include a thread ID so the runtime can resume the saved state. The tool-interrupt pattern pauses before the tool action and allows the resume value to approve, edit, or cancel the action. The documented examples resume with `Command(resume=...)` using the same configuration.\n\n**Runtime detail from the implementation:** on the first invocation, `interrupt()` raises `GraphInterrupt`. When execution resumes, the node is re-executed from its start; previously supplied resume values are returned at the corresponding interrupt positions. Therefore, side effects that occur before an interrupt should be avoided or encapsulated in a task, because the surrounding logic may run again on resumption.\n\nUse a durable checkpointer for production according to the documentation. The exact agent/tool-routing nodes are not shown in the retrieved snippets, but the approval and resumption mechanism above is the documented pattern.",
+                "answer_length": 2593,
+                "prompt_tokens": 6830,
+                "completion_tokens": 873,
+                "total_tokens": 7703,
+                "estimated_cost": 0.0024136,
+                "generation_latency": 10.872888700003386,
+                "is_complete": true,
+                "round_number": 1,
+                "gaps_detected": []
+            }
+        ],
+        "judge_evaluation": {
+            "correctness": {
+                "score": 5.0,
+                "justification": "The answer correctly describes how to build a LangGraph workflow that pauses for human approval before a tool call and resumes later, aligning perfectly with the provided context and code examples."
+            },
+            "groundedness": {
+                "score": 5.0,
+                "justification": "All significant technical claims, including the use of `interrupt()`, checkpointers, thread IDs, `Command(resume=...)`, and the re-execution behavior of nodes, are directly supported by the retrieved documentation and implementation details."
+            },
+            "completeness": {
+                "score": 5.0,
+                "justification": "The answer thoroughly addresses the user's question by explaining the core mechanism, providing relevant code examples, detailing the necessary components (checkpointer, thread ID), and including important considerations like avoiding side effects in re-executed nodes. It also acknowledges the scope of the provided context."
+            },
+            "hallucination": {
+                "score": 0.0,
+                "justification": "There are no unsupported or fabricated technical claims in the generated answer. All information presented is directly derived from the retrieved context."
+            },
+            "missing_concepts": [],
+            "unsupported_claims": []
+        },
+        "overall_metrics": {
+            "total_latency": 69.90308989999176,
+            "total_cost": 0.012866099999999998,
+            "recall_at_k": 0.5,
+            "precision_at_k": 0.18181818181818182,
+            "hit_rate": 1.0,
+            "mrr": 0.3333333333333333
+        }
+    }
+]

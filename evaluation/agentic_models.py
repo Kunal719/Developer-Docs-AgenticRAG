@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+
 from evaluation.models import (
     ExperimentMetadata,
     PipelineStage,
@@ -7,6 +8,8 @@ from evaluation.models import (
     JudgeEvaluation,
     RouterMetrics
 )
+
+from models.retrieval_plan import RetrievalPlan
 from models.query_input import BenchmarkQuestion
 
 
@@ -15,7 +18,8 @@ class AgenticEvaluationResult:
     question: BenchmarkQuestion
     final_answer: str
     experiment_metadata: ExperimentMetadata
-    router_metrics: RouterMetrics | None
+    router_metrics: RouterMetrics
+    retrieval_plan: RetrievalPlan
     pipeline_stages: list[PipelineStage]
     generation_metrics: list[GenerationMetrics]
     judge_evaluation: JudgeEvaluation | None

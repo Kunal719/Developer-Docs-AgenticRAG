@@ -1,5 +1,5 @@
 from models.query_input import QueryInput
-from models.generation import GeneratedAnswer
+from models.generation import GeneratedAnswer, RetrievalGap
 from models.retrieval_plan import RetrievalPlan
 
 from router.query_router import QueryRouter
@@ -28,6 +28,8 @@ from config import (
     GENERATION_INPUT_PRICE, 
     GENERATION_OUTPUT_PRICE
 )
+
+from concurrent.futures import ThreadPoolExecutor
 from time import perf_counter
 
 class AgenticRAG():
@@ -97,10 +99,47 @@ class AgenticRAG():
             )
 
         return generated_answer
+
+    def _process_gap(self, gap: RetrievalGap) -> tuple[list[Document], PipelineObserver]:
+        # A local observer for each gap which will merge with the global observer
+        gap_observer = PipelineObserver()
+
+        # Make retrieval plan
+        gap_retrieval_plan = RetrievalPlan(
+            retrieval_mode="direct",
+            reasoning="Gap retrieval loop",
+            metadata_filters=gap.suggested_filters
+        )
+
+        # Fetch retrieval candidates
+        gap_retrieval_candidates = retrieve_candidates(
+            query_input=None,
+            plan=gap_retrieval_plan,
+            doc_hybrid_retriever=self._doc_hybrid_retriever,
+            code_hybrid_retriever=self._code_hybrid_retriever,
+            multi_corpus_retriever=self._multi_corpus_retriever,
+            multi_query_strategy=self._multi_query_strategy,
+            code_vector_store=self._code_vector_store,
+            query_override=gap.suggested_query,
+            observer=gap_observer
+        )
+
+        # Rerank
+        reranked_gap_candidates = self._reranker.rerank(
+            query=gap.suggested_query,
+            documents=gap_retrieval_candidates,
+            observer=gap_observer,
+            top_k=GAP_RERANK_TOP_K
+        )
+
+        return reranked_gap_candidates, gap_observer
     
     def run(self, query_input: QueryInput, observer: PipelineObserver | None = None) -> GeneratedAnswer:
         # Get retrieval plan
         retrieval_plan = self._query_router.route(query=query_input, observer=observer)
+
+        if observer is not None:
+            observer.record_retrieval_plan(retrieval_plan)
 
         # Get retrieval candidates
         retrieval_candidates = retrieve_candidates(
@@ -162,41 +201,24 @@ class AgenticRAG():
                 return generated_answer
 
             # Run the gap loop
-            for i, gap in enumerate(generated_answer.gaps):
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = [
+                        executor.submit(
+                        self._process_gap, gap
+                    )
+                    for gap in generated_answer.gaps
+                ]
 
-                print(f"\n--- Gap {i} ---")
-                print("Topic:", gap.missing_topic)
-                print("Query:", gap.suggested_query)
-                print("Filters:", gap.suggested_filters)
+                gap_results = [future.result() for future in futures]
 
-                gap_retrieval_plan = RetrievalPlan(
-                    retrieval_mode="direct",
-                    reasoning="Gap retrieval loop",
-                    metadata_filters=gap.suggested_filters
-                )
+            for i, (gap_candidates, gap_observer) in enumerate(gap_results, start=1):
+                print(f"Gap {i} retrieved {len(gap_candidates)} documents")
 
-                gap_retrieval_candidates = retrieve_candidates(
-                    query_input=None,
-                    plan=gap_retrieval_plan,
-                    doc_hybrid_retriever=self._doc_hybrid_retriever,
-                    code_hybrid_retriever=self._code_hybrid_retriever,
-                    multi_corpus_retriever=self._multi_corpus_retriever,
-                    multi_query_strategy=self._multi_query_strategy,
-                    code_vector_store=self._code_vector_store,
-                    query_override=gap.suggested_query,
-                    observer=observer
-                )
+                # Merge the observer stages with global observer
+                if observer is not None:
+                    observer.get_pipeline_stages().extend(gap_observer.get_pipeline_stages())
 
-                reranked_gap_candidates = self._reranker.rerank(
-                    query=gap.suggested_query,
-                    documents=gap_retrieval_candidates,
-                    observer=observer,
-                    top_k=GAP_RERANK_TOP_K
-                )
-
-                print(f"Gap {i} retrieved {len(reranked_gap_candidates)} documents")
-
-                all_candidates.extend(reranked_gap_candidates)
+                all_candidates.extend(gap_candidates)
 
             print(f"Candidates before dedupe (gap round {round_number}): {len(all_candidates)}")
             # Remove duplicates

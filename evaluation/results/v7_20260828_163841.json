@@ -1,0 +1,61 @@
+[
+    {
+        "question": {
+            "question": "Design a LangGraph workflow that processes hundreds of documents in parallel and safely merges extracted information into shared state. Explain how you would prevent state conflicts.",
+            "code_snippet": null,
+            "error": null,
+            "logs": null,
+            "observed_behavior": null,
+            "expected_behavior": null,
+            "id": 44,
+            "category": "architecture",
+            "intent": "parallel_processing",
+            "difficulty": "hard",
+            "expected_files": [
+                "graph-api.mdx",
+                "use-graph-api.mdx",
+                "pregel.mdx",
+                "errors/INVALID_CONCURRENT_GRAPH_UPDATE.mdx",
+                "langgraph/langgraph/types.py",
+                "langgraph/langgraph/graph/state.py"
+            ],
+            "concepts": [
+                "parallel execution",
+                "Send",
+                "reducers",
+                "state management",
+                "workflow design"
+            ],
+            "tags": null,
+            "evidence": null,
+            "queries": null
+        },
+        "final_answer": "## Retrieved facts\n\nLangGraph represents a workflow using shared state, nodes, and edges. Nodes receive state and return updates; reducers determine how concurrent updates to a state key are combined.\n\nFor a document-processing workflow, use a map-reduce structure:\n\n1. A preparation node places the documents or document identifiers in state.\n2. A routing function creates one `Send` task per document, targeting an extraction node.\n3. The extraction node processes one document and returns its extracted information.\n4. A final aggregation node consumes the merged results.\n\nThe retrieved documentation demonstrates this pattern with `Send`, where a routing function returns multiple `Send(\"generate_joke\", ...)` objects and the target node processes each item independently.\n\nA suitable state shape is conceptually:\n\n```python\nimport operator\nfrom typing import Annotated\nfrom typing_extensions import TypedDict\n\nclass State(TypedDict):\n    documents: list[str]\n    extracted: Annotated[list[dict], operator.add]\n```\n\nEach extraction task should return an update such as:\n\n```python\n{\"extracted\": [{\"document_id\": document_id, \"fields\": fields}]}\n```\n\nThe `operator.add` reducer causes concurrent list updates to be accumulated rather than overwritten. The reducer receives the accumulated state as its left argument and the latest node update as its right argument; for lists, the documented result is concatenation.\n\n## Preventing state conflicts\n\n- **Give the shared result key a reducer.** Without a reducer, the default behavior replaces the existing value with the latest update. Multiple parallel nodes updating the same unreduced key can cause `INVALID_CONCURRENT_GRAPH_UPDATE`.\n- **Return independent result items from workers.** Each worker should return its own extracted record in a list, rather than attempting to overwrite one shared scalar or dictionary entry. This lets the reducer combine worker outputs.\n- **Use a separate field if deterministic ordering is required.** The documentation states that updates from a parallel superstep may not be ordered consistently. Therefore, do not use the merged list's incidental order as a document order. Include a document identifier or ordering value in each result, and have a later node establish the required ordering. The exact sorting or deduplication implementation is not specified by the retrieved context.\n- **Rely on superstep boundaries for safe commits.** Parallel branches execute in a superstep. The documented behavior is transactional: if a branch raises an exception, none of that superstep's updates are applied. With a checkpointer, successful node results within a superstep are saved and are not repeated when execution resumes.\n- **Limit concurrency when needed.** The documented invocation configuration supports `max_concurrency`, for example:\n\n```python\ngraph.invoke(\n    {\"documents\": documents},\n    {\"configurable\": {\"max_concurrency\": 10}},\n)\n```\n\nThis limits the maximum number of concurrent tasks; it does not change the reducer or conflict semantics.\n\nIn summary, fan out one extraction task per document, have every task write to a reducer-backed collection, and perform any ordering or final consolidation afterward. This avoids concurrent overwrite conflicts while preserving the independently extracted records.",
+        "experiment_metadata": {
+            "version": "v7",
+            "timestamp": "2026-08-28T16:38:41.822895",
+            "embedding_model": "text-embedding-3-small",
+            "llm_provider": "openai",
+            "llm": "gpt-5.6-luna",
+            "chunk_size": 1200,
+            "chunk_overlap": 200,
+            "dense_top_k": 10,
+            "bm25_top_k": 10,
+            "hybrid_top_k": 16,
+            "rrf_k": 60,
+            "reranker_top_k": 13,
+            "reranker_name": "BAAI/bge-reranker-base",
+            "judge_model": "gemini-2.5-flash",
+            "judge_llm_provider": "google_genai",
+            "router_llm": "gpt-5.6-luna",
+            "router_llm_provider": "openai"
+        },
+        "router_metrics": {
+            "name": "Query Router",
+            "prompt_tokens": 1500,
+            "completion_tokens": 300,
+            "total_tokens": 1800,
+            "estimated_cost": 0.00066,
+            "router_latency": 6.443720300005225
+        },
+        "retrieval_plan": 

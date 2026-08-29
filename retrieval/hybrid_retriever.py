@@ -7,6 +7,8 @@ from models.retrieval_plan import MetadataFilters
 from evaluation.observer import PipelineObserver
 from evaluation.models import RetrievedDocument
 from langchain_core.documents import Document
+
+from concurrent.futures import ThreadPoolExecutor
 from time import perf_counter
 
 class HybridRetriever(BaseRetriever):
@@ -16,10 +18,11 @@ class HybridRetriever(BaseRetriever):
         self._top_k = top_k
         self._rrf_k = rrf_k
 
-    def _rrf(self, results_list: list[list[Document]]) -> list[Document]:
+    def _rrf(self, results_list: list[list[Document]], gap_top_k: int | None = None) -> list[Document]:
         scores = {}
         doc_map = {}
 
+        final_top_k = gap_top_k if gap_top_k is not None else self._top_k
         for retrieved_docs in results_list:
             for rank, doc in enumerate(retrieved_docs):
                 doc_id = doc.metadata["chunk_id"]
@@ -32,12 +35,12 @@ class HybridRetriever(BaseRetriever):
 
         ranked_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
-        fused_docs = [doc_map[doc_id] for doc_id, _ in ranked_scores[:self._top_k]]
-        fused_scores = [scores[doc_id] for doc_id, _ in ranked_scores[:self._top_k]]
+        fused_docs = [doc_map[doc_id] for doc_id, _ in ranked_scores[:final_top_k]]
+        fused_scores = [scores[doc_id] for doc_id, _ in ranked_scores[:final_top_k]]
 
         return fused_docs, fused_scores
 
-    def retrieve(self, query: str, observer: PipelineObserver | None = None, filters: MetadataFilters = None) -> list[Document]:
+    def retrieve(self, query: str, observer: PipelineObserver | None = None, filters: MetadataFilters = None, gap_top_k: int | None = None) -> list[Document]:
         """
         Retrieve the most relevant documents using Dense Retriever and BM25 Retriever
 
@@ -49,20 +52,37 @@ class HybridRetriever(BaseRetriever):
             List of retrieved documents
         """
 
-        dense_results = self._dense_retriever.retrieve(query, observer, filters)
-        bm25_results = self._bm25_index.retrieve(query, observer, filters)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            dense_future = executor.submit(self._dense_retriever.retrieve, query, observer, filters)
+            bm25_future = executor.submit(self._bm25_index.retrieve, query, observer, filters)
+
+            dense_results = dense_future.result()
+            bm25_results = bm25_future.result()
 
         start_time = perf_counter()
-        fused_results, fused_scores = self._rrf([dense_results, bm25_results])
+        fused_results, fused_scores = self._rrf([dense_results, bm25_results], gap_top_k)
         end_time = perf_counter()
 
         if observer is not None:
             observer_docs: list[RetrievedDocument] = []
 
             for i, (doc, score) in enumerate(zip(fused_results, fused_scores)):
-                observer_docs.append(RetrievedDocument(chunk_id=doc.metadata.get("chunk_id"), source=doc.metadata.get("source"), document_type=doc.metadata.get("corpus"), retriever_score=score, rank=i+1))
+                observer_docs.append(
+                    RetrievedDocument(
+                        chunk_id=doc.metadata.get("chunk_id"), 
+                        source=doc.metadata.get("source"), 
+                        document_type=doc.metadata.get("corpus"), 
+                        retriever_score=score, 
+                        rank=i+1
+                    )
+                )
 
-            observer.record_stage("RRF Fusion", (end_time - start_time), self._top_k, observer_docs)
+            observer.record_stage(
+                "RRF Fusion",
+                (end_time - start_time),
+                gap_top_k if gap_top_k is not None else self._top_k,
+                observer_docs
+            )
 
         return fused_results
 

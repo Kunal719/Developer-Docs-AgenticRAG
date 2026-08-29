@@ -2,16 +2,19 @@ import json
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+from typing import Sequence
 
 from config import PROJECT_VERSION
 from evaluation.models import EvaluationResult
+from evaluation.agentic_models import AgenticEvaluationResult
+
 
 
 class ResultWriter:
     RESULTS_DIRECTORY = Path("evaluation/results")
 
     @classmethod
-    def save(cls, results: list[EvaluationResult]) -> Path:
+    def save(cls, results: Sequence[AgenticEvaluationResult | EvaluationResult]) -> Path:
         """
         Save benchmark results as a timestamped JSON file.
         """
@@ -32,6 +35,13 @@ class ResultWriter:
                 )
             else:
                 result_dict["judge_evaluation"] = None
+
+            if result.retrieval_plan is not None:
+                result_dict["retrieval_plan"] = (
+                    result.retrieval_plan.model_dump()
+                )
+            else:
+                result_dict["retrieval_plan"] = None
 
             # Convert datetime to ISO string
             result_dict["experiment_metadata"]["timestamp"] = (
