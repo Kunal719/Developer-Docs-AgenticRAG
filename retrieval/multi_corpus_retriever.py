@@ -1,7 +1,10 @@
 from retrieval.base import BaseRetriever
-from langchain_core.documents import Document
 from evaluation.observer import PipelineObserver
 from models.retrieval_plan import MetadataFilters
+
+from langchain_core.documents import Document
+
+from concurrent.futures import ThreadPoolExecutor
 
 class MultiCorpusRetriever(BaseRetriever):
 
@@ -20,7 +23,22 @@ class MultiCorpusRetriever(BaseRetriever):
         """
         combined_docs = []
 
-        for retriever in self._retrievers:
-            combined_docs.extend(retriever.retrieve(query, observer=observer, filters=filters, gap_top_k=gap_top_k))
+        # for retriever in self._retrievers:
+        #     combined_docs.extend(retriever.retrieve(query, observer=observer, filters=filters, gap_top_k=gap_top_k))
+
+        with ThreadPoolExecutor(max_workers=len(self._retrievers)) as executor:
+            futures = [
+                executor.submit(
+                    retriever.retrieve,
+                    query=query,
+                    observer=observer,
+                    filters=filters,
+                    gap_top_k=gap_top_k,
+                )
+                for retriever in self._retrievers
+            ]
+
+            for future in futures:
+                combined_docs.extend(future.result())
             
         return combined_docs

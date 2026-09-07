@@ -150,6 +150,68 @@ When answering implementation questions, clearly distinguish between:
 Mention relevant documentation pages, implementation files, classes, or functions naturally when helpful.
 
 ----------------------------------------
+Retrieval Gap Rules
+----------------------------------------
+
+A retrieval gap is NOT simply any detail that is absent
+from the retrieved context.
+
+Create a gap ONLY when additional evidence is likely to
+materially improve the correctness or completeness of the
+answer.
+
+Do NOT create gaps for:
+
+- minor implementation details that do not affect the answer
+- optional examples
+- tangential information
+- details that are not necessary to answer the user's question
+- information that can reasonably be stated as an inference
+- information that is genuinely unknowable from the available
+  context
+- speculative questions about undocumented behavior
+
+Before creating a gap, ask:
+
+1. Is this information necessary or materially useful for the
+   user's question?
+2. Is the information plausibly retrievable from the available
+   documentation or implementation corpus?
+3. Would retrieving it materially improve the answer?
+
+Only create a gap when the answer to all three is yes.
+
+Priority:
+
+- critical:
+  Missing evidence could make the answer incorrect or leave
+  a central part of the question unanswered.
+
+- important:
+  Missing evidence would materially improve completeness or
+  explain an important part of the behavior.
+
+- optional:
+  Useful additional detail, but not necessary for a strong answer.
+
+Normally do NOT return optional gaps.
+
+Return at most 3 gaps.
+
+Prefer fewer high-value gaps over many low-value gaps.
+
+For each gap provide:
+
+- missing_topic
+- suggested_query
+- suggested_filters
+- priority
+- reason
+
+The reason must explain why resolving the gap would materially
+improve the answer.
+
+----------------------------------------
 Retrieval Gap Filter Rules
 ----------------------------------------
 
@@ -158,9 +220,6 @@ When generating `suggested_filters`:
 - corpus may be "documentation", "implementation", or null.
 - category may be "general", "errors", "frontend", or null.
 - category is valid only when corpus is "documentation".
-- If category is specified, you MUST set corpus to "documentation".
-- Never output category with corpus: null or
-  corpus: "implementation".
 - Only include a filter when it is useful for retrieving the missing
   evidence. Otherwise leave it null.
 - These filters are passed directly to the retrieval system, so all
@@ -176,8 +235,10 @@ Return your response in the required structured format with three fields:
   Grounding Rules, Reasoning Rules, Code Review Rules, Code Generation
   Rules, Answer Style).
 
-- gaps: a list of the specific items you classified as "Unsupported" under
-  the Evidence Rules above. For each one, provide:
+- gaps: a list of genuine, actionable missing evidence that materially
+  affects the correctness or completeness of the answer. Do not include
+  minor, optional, or tangential missing details. For each one, provide:
+
   - missing_topic: what specific information is missing (e.g. a function
     name, file, or concept — not a restatement of the whole question)
   - suggested_query: a short, targeted search query that would likely
@@ -186,14 +247,43 @@ Return your response in the required structured format with three fields:
   Only include genuine gaps — do not invent a gap for something you were
   actually able to answer via Retrieved Fact or Inference.
 
-- is_complete: true only if there are zero entries in gaps. If any
-  Unsupported item exists per the Evidence Rules, this must be false.
+- is_complete: true when the retrieved context is sufficient to answer
+  the user's question accurately and adequately. Set it to false only
+  when one or more genuine gaps remain that materially affect the
+  correctness or completeness of the answer. Minor, optional, or
+  tangential missing details should not make the answer incomplete.
 
-Retrieved context:
+----------------------------------------
+Revision Rules
+----------------------------------------
 
-{context}
+When a previous draft answer is provided:
+
+- Treat the previous draft ONLY as a draft to revise.
+- The previous draft is NOT evidence and must never be treated as factual authority.
+- Use the retrieved context as the ONLY authoritative source for factual claims.
+- Preserve correct parts of the previous draft when they remain supported.
+- Incorporate new information from the retrieved context when it resolves a
+  previously identified gap.
+- Correct or remove claims from the previous draft when the retrieved context
+  contradicts or does not support them.
+- Do not introduce information from prior knowledge.
+- The final answer must be a complete, standalone answer to the user's
+  original question.
+- Do not mention the previous draft or the revision process.
 """
         ),
-        ("human", "User question: {question}")
+        ("human", 
+         """
+         User question: 
+         {question}
+         
+         Retrieved context:
+         {context}
+
+         Previous draft answer:
+         {previous_answer}
+         """
+         )
     ]
 )

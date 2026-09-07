@@ -1,0 +1,1384 @@
+[
+    {
+        "question": {
+            "question": "A LangGraph workflow executes a subgraph and a normal parent-graph node in parallel after the same upstream node. The subgraph writes one state key while the parent node writes a different state key, yet execution fails with InvalidUpdateError saying that another state key can receive only one value per step. Review the implementation and explain how LangGraph applies writes from parallel tasks, how channels determine whether multiple values are allowed, why a subgraph can participate in a concurrent update even when it does not directly modify the reported key, and under what conditions an Annotated reducer is actually required. Distinguish the logical state keys written by individual nodes from the channel-level writes accumulated by the Pregel execution step. Then provide the corrected code for this example and explain why the change resolves the error, including why adding a reducer to the conflicting key is or is not the appropriate fix.",
+            "code_snippet": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\n\nclass State(TypedDict):\n    a: str\n    b: str\n\ndef parent_node(state):\n    return {\"b\": \"parent-result\"}\n\ndef subgraph_node(state):\n    return {\"a\": \"subgraph-result\"}\n\nchild = StateGraph(State)\nchild.add_node(\"child\", subgraph_node)\nchild.add_edge(START, \"child\")\nchild.add_edge(\"child\", END)\nsubgraph = child.compile()\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"parent\", parent_node)\nbuilder.add_node(\"subgraph\", subgraph)\nbuilder.add_edge(START, \"parent\")\nbuilder.add_edge(START, \"subgraph\")\nbuilder.add_edge(\"parent\", END)\nbuilder.add_edge(\"subgraph\", END)\n\ngraph = builder.compile()\ngraph.invoke({\"a\": \"\", \"b\": \"\"})",
+            "error": "langgraph.errors.InvalidUpdateError: At key 'b': Can receive only one value per step. Use an Annotated key to handle multiple values.",
+            "logs": null,
+            "observed_behavior": "A state update can fail with a concurrent-update error even though the application believes the parallel tasks are updating independent keys.",
+            "expected_behavior": "The application should understand which channel receives the conflicting writes, why the Pregel step considers them concurrent, and define an appropriate reducer only when the state semantics genuinely allow multiple values. For this example, the corrected implementation should isolate the subgraph's state schema so that it does not propagate the unrelated parent state key b as part of the subgraph's state update. The answer should provide corrected code and explain why a reducer on b is not the appropriate fix when the conflicting write is unintended.",
+            "id": 16,
+            "category": "debugging",
+            "intent": "parallel_subgraph_state_collision",
+            "difficulty": "very_hard",
+            "expected_files": [
+                "errors/INVALID_CONCURRENT_GRAPH_UPDATE.mdx",
+                "graph-api.mdx",
+                "pregel.mdx",
+                "persistence.mdx",
+                "checkpointers.mdx",
+                "langgraph/langgraph/channels/base.py",
+                "langgraph/langgraph/channels/last_value.py",
+                "langgraph/langgraph/channels/binop.py",
+                "langgraph/langgraph/pregel/main.py",
+                "langgraph/langgraph/pregel/_algo.py",
+                "langgraph/langgraph/pregel/_loop.py",
+                "langgraph/langgraph/graph/state.py"
+            ],
+            "concepts": [
+                "Pregel execution",
+                "parallel writes",
+                "channels",
+                "LastValue",
+                "reducers",
+                "Annotated state",
+                "subgraphs",
+                "concurrent graph updates",
+                "subgraph state schemas",
+                "state propagation"
+            ],
+            "tags": [
+                "parallel_execution",
+                "subgraph_state",
+                "invalid_concurrent_graph_update",
+                "last_value",
+                "reducers",
+                "pregel_writes",
+                "state_schema",
+                "state_propagation",
+                "debugging"
+            ],
+            "evidence": null,
+            "queries": [
+                "How does LangGraph apply writes from parallel nodes and subgraphs?",
+                "Why can a parallel subgraph cause INVALID_CONCURRENT_GRAPH_UPDATE for a state key it does not explicitly modify?",
+                "How do LangGraph channels determine whether multiple values can be written in one step?",
+                "How does LastValue behave when multiple tasks write during the same Pregel step?",
+                "When does LangGraph require an Annotated reducer for concurrent state updates?",
+                "How are pending writes from parallel tasks collected and applied to graph channels?",
+                "How should a LangGraph subgraph state schema be defined to avoid propagating unrelated parent state keys?",
+                "What is the correct code fix for a concurrent update caused by a subgraph sharing the parent state schema?"
+            ]
+        },
+        "final_answer": "## Channel-level behavior\n\n`StateGraph` state keys are backed by channels. The implementation of `LastValue.update` shows that its channel accepts no more than one value in a single update step:\n\n```python\nif len(values) != 1:\n    raise InvalidUpdateError(...)\n```\n\nTherefore, the error means that the channel associated with key `b` received two values during the same Pregel step. It does **not** necessarily mean that two application nodes explicitly returned `{\"b\": ...}`.\n\nThe important distinction is:\n\n- A node logically returns updates for state keys, such as `parent_node` returning `b` and `subgraph_node` returning `a`.\n- The Pregel execution step accumulates writes from all tasks that run in that step and applies them to channels.\n- A channel validates the complete collection of values it receives for that step.\n\n`LastValue` rejects multiple values. By contrast, `AnyValue.update` accepts multiple values and stores the last value in its input sequence. A channel backed by a binary operator can aggregate values using that operator. Thus, whether concurrent writes are valid is determined by the channel's update semantics, not only by whether the application considers the logical keys to be independent.\n\n## Why the subgraph can affect `b`\n\nThe retrieved implementation does not include the Pregel write-collection code or the subgraph-boundary code, so it does not directly show the exact operation that forwards the second `b` value. However, the observed error establishes that two values reached the `b` channel in the step containing `parent` and `subgraph`.\n\nGiven the shown code, the relevant design issue is that both the parent graph and the child graph use the same `State` schema. The child graph therefore has `b` as part of its state interface even though its node only intends to update `a`. At the graph boundary, the subgraph participates in the parent step's channel updates; it is not treated merely as an isolated function that can only affect keys visibly returned by its innermost node.\n\nThis explains the apparent discrepancy: `subgraph_node` writes logical key `a`, but the compiled subgraph can still contribute a state update involving the shared `b` channel. That contribution is concurrent with `parent_node`'s write to `b`, so `LastValue` sees multiple values for `b` and raises `InvalidUpdateError`.\n\nThe statement about the boundary is an inference from the observed error and the shared-schema setup; the retrieved context does not contain the implementation that performs this propagation.\n\n## Corrected code\n\nGive the child graph a schema containing only the state it owns:\n\n```python\nfrom typing import TypedDict\n\nfrom langgraph.graph import END, START, StateGraph\n\n\nclass State(TypedDict):\n    a: str\n    b: str\n\n\nclass ChildState(TypedDict):\n    a: str\n\n\ndef parent_node(state: State):\n    return {\"b\": \"parent-result\"}\n\n\ndef subgraph_node(state: ChildState):\n    return {\"a\": \"subgraph-result\"}\n\n\nchild = StateGraph(ChildState)\nchild.add_node(\"child\", subgraph_node)\nchild.add_edge(START, \"child\")\nchild.add_edge(\"child\", END)\nsubgraph = child.compile()\n\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"parent\", parent_node)\nbuilder.add_node(\"subgraph\", subgraph)\nbuilder.add_edge(START, \"parent\")\nbuilder.add_edge(START, \"subgraph\")\nbuilder.add_edge(\"parent\", END)\nbuilder.add_edge(\"subgraph\", END)\n\ngraph = builder.compile()\nresult = graph.invoke({\"a\": \"\", \"b\": \"\"})\n```\n\nThe child schema restricts the subgraph's state interface to `a`. Consequently, the subgraph should not propagate an unrelated `b` update into the parent graph's `b` channel. The parent node remains the sole writer of `b` in that step, so the `LastValue` constraint is satisfied.\n\nThe retrieved `_coerce_state` implementation also shows that state inputs are constructed from the selected schema:\n\n```python\ndef _coerce_state(schema, input):\n    return schema(**input)\n```\n\nThis is consistent with using a narrower schema for the child, although the retrieved context does not provide the complete subgraph input/output mapping implementation.\n\n## Is a reducer on `b` the right fix?\n\nNo—not for this example. A reducer is appropriate only when multiple concurrent values for the same logical state key are intentional and the state semantics define how to combine them. For example, an aggregate channel may use a binary operator, while `LastValue` deliberately rejects multiple values.\n\nHere, `parent_node` is intended to write `b`, while the subgraph is intended to write `a`. The second `b` update is therefore unintended. Adding an `Annotated` reducer to `b` would merely make the channel accept or combine an update that should not have been emitted; it could also discard or merge values according to semantics that the application never intended.\n\nThe appropriate correction is to isolate the child schema so that the subgraph does not participate in the parent graph's unrelated `b` channel. Use a reducer on `b` only if the application genuinely wants multiple parallel tasks to write `b` and has a defined combination rule for those values.",
+        "experiment_metadata": {
+            "version": "v7",
+            "timestamp": "2026-08-30T21:06:41.309925",
+            "embedding_model": "text-embedding-3-small",
+            "llm_provider": "openai",
+            "llm": "gpt-5.6-luna",
+            "chunk_size": 1200,
+            "chunk_overlap": 200,
+            "dense_top_k": 10,
+            "bm25_top_k": 10,
+            "hybrid_top_k": 16,
+            "rrf_k": 60,
+            "reranker_top_k": 13,
+            "reranker_name": "BAAI/bge-reranker-base",
+            "judge_model": "gemini-2.5-flash",
+            "judge_llm_provider": "google_genai",
+            "router_llm": "gpt-5.6-luna",
+            "router_llm_provider": "openai"
+        },
+        "router_metrics": {
+            "name": "Query Router",
+            "prompt_tokens": 2054,
+            "completion_tokens": 537,
+            "total_tokens": 2591,
+            "estimated_cost": 0.0010552,
+            "router_latency": 7.650133399991319
+        },
+        "retrieval_plan": {
+            "retrieval_mode": "multi_query_fusion",
+            "reasoning": "This is a multi-hop implementation question spanning subgraph state-schema propagation, Pregel step write collection, channel update semantics, and reducer behavior. These topics are best retrieved separately from their respective implementation areas and fused.",
+            "sub_queries": [
+                "how Pregel collects and applies writes from parallel tasks during one execution step",
+                "how LangGraph channels handle multiple updates and raise InvalidUpdateError for LastValue channels",
+                "how compiled subgraphs propagate parent state schemas and channel writes to the parent graph",
+                "how StateGraph derives channels from TypedDict fields and handles subgraph input and output schemas",
+                "when Annotated reducers such as BinaryOperatorAggregate are required for concurrent state updates"
+            ],
+            "combined_query": null,
+            "metadata_filters": {
+                "corpus": "implementation",
+                "module_names": null,
+                "class_names": [
+                    "StateGraph",
+                    "InvalidUpdateError",
+                    "Pregel",
+                    "LastValue",
+                    "BinaryOperatorAggregate"
+                ],
+                "function_names": null,
+                "category": null
+            }
+        },
+        "pipeline_stages": [
+            {
+                "name": "Multi Query Fusion",
+                "latency": 2.7784880999970483,
+                "top_k": 40,
+                "documents": [
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.07990074441687345,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.07837301587301587,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "54851effaa88959930e4cfe7e648a16cc7ecb3b41d38658c8524ff9b3d33acf8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.07340300661196184,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "24fbb69ade57e17a1f7b8e49baa2d9b37955095d37c873ff87ecb16895795aea",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.0725247543022479,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "576df20178872943cea965e3fef0e263c54e1bcd3c938858a336158eac2da6df",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.07012288730663997,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.06864071944567302,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "1931fa957bf60822d91db11498de894579bc0dad1aa1b4b424db70ed2613e839",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.06739706541436895,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "dc28303f7f934d48a06d59d9af8ac44bfc239b332b17be335423e23cd8597532",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.061191397735829114,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "8c94835732219bb2e35383de2cdb734405129450c5147adae32b8472617062c1",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.05963927376970855,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "f273a0bcdcf7e54a09a18112e7a22e21107db317b485adbbba32087e7977b6e4",
+                        "source": "langgraph/langgraph/graph/message.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.05725979990685873,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "4e81f8de5adf277ec5ef760d4408cab9c9220fab64202e4529fb50eeb20c8527",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.045582522915269395,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "d18eee7b5ad9228c0434a36238f2d0260465611d8ba8ef28c6d52cf20274d2c7",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.04511139134089954,
+                        "reranker_score": null,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "4f2ad0de5a4fb747987881f1ab873beb46a62d0a46d605dbad9beb3ff35484c9",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.031054405392392875,
+                        "reranker_score": null,
+                        "rank": 13
+                    },
+                    {
+                        "chunk_id": "10056e04b5dadba322e6a5df0d11cf9c7c0aa9a7d9a61798f9b3d54b9a54d67b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.030309988518943745,
+                        "reranker_score": null,
+                        "rank": 14
+                    },
+                    {
+                        "chunk_id": "2f8634c797796a7447616906e80a9f2581f750c2e8341bb6ade8c8154941eb9c",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.02964426877470356,
+                        "reranker_score": null,
+                        "rank": 15
+                    },
+                    {
+                        "chunk_id": "4b9ccfb4571c0c1d4dfde48424abb1fb8db9705ddf300fd7878b4494e4f81f39",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.02862400327131466,
+                        "reranker_score": null,
+                        "rank": 16
+                    },
+                    {
+                        "chunk_id": "ff683735e2329982776cd0ebe1685a567aa59cbd8d4407e8e811161b835a17ec",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.02782608695652174,
+                        "reranker_score": null,
+                        "rank": 17
+                    },
+                    {
+                        "chunk_id": "03f3beebc4c1016b393638539b176f42b3c33b9064cf87acada34cdf7bfd512b",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.027031963470319637,
+                        "reranker_score": null,
+                        "rank": 18
+                    },
+                    {
+                        "chunk_id": "aeb922a79457148a0b84f11d26cb57b99bca094ea0e11d2d6d134b99084d5808",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 19
+                    },
+                    {
+                        "chunk_id": "737d05b6b3aaf60ea568a11fe56eb538efb2de06e0919b8da4e269a27d429f1e",
+                        "source": "langgraph/langgraph/channels/last_value.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 20
+                    },
+                    {
+                        "chunk_id": "ddb0122d377aba69be6dc937f47ed851e8f6343c24edf76a5638ed5bb4857bb7",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 21
+                    },
+                    {
+                        "chunk_id": "d392caf346f04057276d434493261e3eb02b627e0671744e2b5a77e490ed7f15",
+                        "source": "langgraph/langgraph/channels/delta.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 22
+                    },
+                    {
+                        "chunk_id": "c82bf9a564e6f3261e0de531df25488aadba6c5a4b311a695ab27cf50de08b49",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 23
+                    },
+                    {
+                        "chunk_id": "55d1d1ba2b23dd5b3ef4d9f67f896d46584b1b94db50b393875c6b1e8a31b43a",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 24
+                    },
+                    {
+                        "chunk_id": "49d6f603a003a5b07462ba5699ebb797c79e53f924e5cd9d7cbc8ddd38aff2bc",
+                        "source": "langgraph/langgraph/channels/last_value.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014492753623188406,
+                        "reranker_score": null,
+                        "rank": 25
+                    },
+                    {
+                        "chunk_id": "fc0fb976edf79846f65fd46d7f56a29572db2dafe5f13f2ba95f24fd34c57805",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014285714285714285,
+                        "reranker_score": null,
+                        "rank": 26
+                    },
+                    {
+                        "chunk_id": "d091e0c264c6cb1a15912406aa85e00ccc21c8ec73ad6fa3cd62c261a8aabcea",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014084507042253521,
+                        "reranker_score": null,
+                        "rank": 27
+                    },
+                    {
+                        "chunk_id": "1ab23e05c3c34de7ee0038bdf3eb9ff73ee3c7ec18e2ec0de480d863d102cda8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014084507042253521,
+                        "reranker_score": null,
+                        "rank": 28
+                    },
+                    {
+                        "chunk_id": "a4275a4b960ae2a8dac9bd73d41b84654ac7c37257166d07898a471fe2468ad5",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014084507042253521,
+                        "reranker_score": null,
+                        "rank": 29
+                    },
+                    {
+                        "chunk_id": "af0243ca2b8607a3e4f2fc9c94b820be6145789d979d8ac5cb2cc42ac458a916",
+                        "source": "langgraph/langgraph/channels/any_value.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.0136986301369863,
+                        "reranker_score": null,
+                        "rank": 30
+                    },
+                    {
+                        "chunk_id": "ba44b0b61f663d96e0eba685dc61874a109a332738a81939b31acfab8a1bf6e3",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.013513513513513514,
+                        "reranker_score": null,
+                        "rank": 31
+                    },
+                    {
+                        "chunk_id": "f0e92e4a1bd835fc349cfb5daf8a00d51c176bbaa387a005bc7b19c4c5aa62e7",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.013333333333333334,
+                        "reranker_score": null,
+                        "rank": 32
+                    },
+                    {
+                        "chunk_id": "4bc6ad92d763f32d9e33b422df91cf82906bdc761bc89aadc284c5ecddf158c5",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.013157894736842105,
+                        "reranker_score": null,
+                        "rank": 33
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 26.060195300000487,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "737d05b6b3aaf60ea568a11fe56eb538efb2de06e0919b8da4e269a27d429f1e",
+                        "source": "langgraph/langgraph/channels/last_value.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 5.834591865539551,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "4e81f8de5adf277ec5ef760d4408cab9c9220fab64202e4529fb50eeb20c8527",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 3.5604782104492188,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 3.44269061088562,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "ba44b0b61f663d96e0eba685dc61874a109a332738a81939b31acfab8a1bf6e3",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 3.318011999130249,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "7d8b3dce0bc670b4b72342fb780b173ecbfa4d939630e8b55c17a77a66871a3d",
+                        "source": "langgraph/langgraph/channels/binop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 3.068495750427246,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.960113525390625,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "935c4f994236e5b5236d581f6425da480a97549580de90f3184d0e18523d1967",
+                        "source": "langgraph/langgraph/channels/binop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.8772480487823486,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "af0243ca2b8607a3e4f2fc9c94b820be6145789d979d8ac5cb2cc42ac458a916",
+                        "source": "langgraph/langgraph/channels/any_value.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.775744676589966,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "10056e04b5dadba322e6a5df0d11cf9c7c0aa9a7d9a61798f9b3d54b9a54d67b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.7750542163848877,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "49d6f603a003a5b07462ba5699ebb797c79e53f924e5cd9d7cbc8ddd38aff2bc",
+                        "source": "langgraph/langgraph/channels/last_value.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.7663583755493164,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "790fe3bb8b8f5a401103547530586e3e375b856a6677563c50fc5307cbffb62a",
+                        "source": "langgraph/langgraph/channels/binop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.7475693225860596,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "c1a811e1a8db415a1ae3a5577517a81098c3353c6e32bf5711d271277d6ece20",
+                        "source": "langgraph/langgraph/channels/binop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.7247297763824463,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "1ab23e05c3c34de7ee0038bdf3eb9ff73ee3c7ec18e2ec0de480d863d102cda8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.5358707904815674,
+                        "rank": 13
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.007784199988236651,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "36bcc38dfd72a78a0e74904596f23519d2f3ebf782f16b492c52713403ba3275",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d480fd9e4b76dc2fd2e7faf5a839eefe4593148cc6cbe32fafa65544f0f2c062",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "03f3beebc4c1016b393638539b176f42b3c33b9064cf87acada34cdf7bfd512b",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c82bf9a564e6f3261e0de531df25488aadba6c5a4b311a695ab27cf50de08b49",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6f53d0374e3db1b303309e634ee9754a9f3864f3b8520a5ab729c405bdd69538",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d091e0c264c6cb1a15912406aa85e00ccc21c8ec73ad6fa3cd62c261a8aabcea",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ca860c6c5f97707d209b3556d07784019f7f0a99237372d099d022bbf8f1635b",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "974ad51b260ce58881e26682395e61b3e8efdfd9e17580bc76be7619d93e58a0",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "dc28303f7f934d48a06d59d9af8ac44bfc239b332b17be335423e23cd8597532",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 0.749593399988953,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "dc28303f7f934d48a06d59d9af8ac44bfc239b332b17be335423e23cd8597532",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "974ad51b260ce58881e26682395e61b3e8efdfd9e17580bc76be7619d93e58a0",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "55d1d1ba2b23dd5b3ef4d9f67f896d46584b1b94db50b393875c6b1e8a31b43a",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7f91e8e8ef3b783434add3e9dd0bf5f6e043592ee42c990e858afdce05eede9b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "cff8c3177f590e4e763c37c048bfd6b3c2db9af116a3983cca3764ca857d7dda",
+                        "source": "langgraph/langgraph/pregel/_checkpoint.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ff683735e2329982776cd0ebe1685a567aa59cbd8d4407e8e811161b835a17ec",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3057956ed6cdd3970d183a1bc45586b87b9f95a9e20cb2ee7f0c61b36bd1bcc8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8c94835732219bb2e35383de2cdb734405129450c5147adae32b8472617062c1",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5ee8214dc2928faa17e5a3058603595e9e5db7fa1c642a8600bfce9ef29da028",
+                        "source": "langgraph/langgraph/pregel/_io.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "edb712c9e7d8b68fb807989213f6d91162665c00c029307cdd5613d9d4eb6c6a",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 6.130000110715628e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "dc28303f7f934d48a06d59d9af8ac44bfc239b332b17be335423e23cd8597532",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.030679156908665108,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "974ad51b260ce58881e26682395e61b3e8efdfd9e17580bc76be7619d93e58a0",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.030621785881252923,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "36bcc38dfd72a78a0e74904596f23519d2f3ebf782f16b492c52713403ba3275",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "55d1d1ba2b23dd5b3ef4d9f67f896d46584b1b94db50b393875c6b1e8a31b43a",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "d480fd9e4b76dc2fd2e7faf5a839eefe4593148cc6cbe32fafa65544f0f2c062",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "7f91e8e8ef3b783434add3e9dd0bf5f6e043592ee42c990e858afdce05eede9b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "03f3beebc4c1016b393638539b176f42b3c33b9064cf87acada34cdf7bfd512b",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 9.068313099996885,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "974ad51b260ce58881e26682395e61b3e8efdfd9e17580bc76be7619d93e58a0",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.6798050403594971,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "03f3beebc4c1016b393638539b176f42b3c33b9064cf87acada34cdf7bfd512b",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.4670872986316681,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "dc28303f7f934d48a06d59d9af8ac44bfc239b332b17be335423e23cd8597532",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.3226281404495239,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "7f91e8e8ef3b783434add3e9dd0bf5f6e043592ee42c990e858afdce05eede9b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.5320369601249695,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "55d1d1ba2b23dd5b3ef4d9f67f896d46584b1b94db50b393875c6b1e8a31b43a",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.7313483953475952,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 11.74053239999921,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "737d05b6b3aaf60ea568a11fe56eb538efb2de06e0919b8da4e269a27d429f1e",
+                        "source": "langgraph/langgraph/channels/last_value.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 5.834591865539551,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "4e81f8de5adf277ec5ef760d4408cab9c9220fab64202e4529fb50eeb20c8527",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 3.5604782104492188,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 3.44269061088562,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "ba44b0b61f663d96e0eba685dc61874a109a332738a81939b31acfab8a1bf6e3",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 3.318011999130249,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "7d8b3dce0bc670b4b72342fb780b173ecbfa4d939630e8b55c17a77a66871a3d",
+                        "source": "langgraph/langgraph/channels/binop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 3.068495750427246,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.960113525390625,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "935c4f994236e5b5236d581f6425da480a97549580de90f3184d0e18523d1967",
+                        "source": "langgraph/langgraph/channels/binop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.8772480487823486,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "af0243ca2b8607a3e4f2fc9c94b820be6145789d979d8ac5cb2cc42ac458a916",
+                        "source": "langgraph/langgraph/channels/any_value.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.775744676589966,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "10056e04b5dadba322e6a5df0d11cf9c7c0aa9a7d9a61798f9b3d54b9a54d67b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.7750542163848877,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "49d6f603a003a5b07462ba5699ebb797c79e53f924e5cd9d7cbc8ddd38aff2bc",
+                        "source": "langgraph/langgraph/channels/last_value.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.7663583755493164,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "790fe3bb8b8f5a401103547530586e3e375b856a6677563c50fc5307cbffb62a",
+                        "source": "langgraph/langgraph/channels/binop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.7475693225860596,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "c1a811e1a8db415a1ae3a5577517a81098c3353c6e32bf5711d271277d6ece20",
+                        "source": "langgraph/langgraph/channels/binop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.7247297763824463,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "7f91e8e8ef3b783434add3e9dd0bf5f6e043592ee42c990e858afdce05eede9b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.5671539306640625,
+                        "rank": 13
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.003430800003116019,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "ea0177e73ad684e3b60aab2140c4bcc241441b159c2b072a158cf64a1fc3f868",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a4275a4b960ae2a8dac9bd73d41b84654ac7c37257166d07898a471fe2468ad5",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "94bb9a2745f9c7baad3c79384bf7d7be312a6ceef6aa7c246dace5ce5c3908fe",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1bf6e8185ae04ad91348d47e016f7736620b56f4d197dbfc41fb408302f03183",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d5885774bba393f398aaadb5e3bcca064a9d8e4b58b6e86d27b00e9b73042f99",
+                        "source": "langgraph/langgraph/pregel/_read.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c82bf9a564e6f3261e0de531df25488aadba6c5a4b311a695ab27cf50de08b49",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d091e0c264c6cb1a15912406aa85e00ccc21c8ec73ad6fa3cd62c261a8aabcea",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d533f612a0eaa60d7587d6154d67b4d30b409af8fbb2ffbf4c46f3461cd6ad25",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c71e87efe1898830ade954a441b8bbade9a7dab625b59104d376606d64f0d2c9",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "974ad51b260ce58881e26682395e61b3e8efdfd9e17580bc76be7619d93e58a0",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 0.9631523999996716,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "dc28303f7f934d48a06d59d9af8ac44bfc239b332b17be335423e23cd8597532",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8c94835732219bb2e35383de2cdb734405129450c5147adae32b8472617062c1",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4e81f8de5adf277ec5ef760d4408cab9c9220fab64202e4529fb50eeb20c8527",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2f8634c797796a7447616906e80a9f2581f750c2e8341bb6ade8c8154941eb9c",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d18eee7b5ad9228c0434a36238f2d0260465611d8ba8ef28c6d52cf20274d2c7",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "03f3beebc4c1016b393638539b176f42b3c33b9064cf87acada34cdf7bfd512b",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4f2ad0de5a4fb747987881f1ab873beb46a62d0a46d605dbad9beb3ff35484c9",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a4275a4b960ae2a8dac9bd73d41b84654ac7c37257166d07898a471fe2468ad5",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "974ad51b260ce58881e26682395e61b3e8efdfd9e17580bc76be7619d93e58a0",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1ab23e05c3c34de7ee0038bdf3eb9ff73ee3c7ec18e2ec0de480d863d102cda8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.569999873638153e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "a4275a4b960ae2a8dac9bd73d41b84654ac7c37257166d07898a471fe2468ad5",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.030834914611005692,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "974ad51b260ce58881e26682395e61b3e8efdfd9e17580bc76be7619d93e58a0",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.02877846790890269,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "dc28303f7f934d48a06d59d9af8ac44bfc239b332b17be335423e23cd8597532",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "ea0177e73ad684e3b60aab2140c4bcc241441b159c2b072a158cf64a1fc3f868",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "8c94835732219bb2e35383de2cdb734405129450c5147adae32b8472617062c1",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "4e81f8de5adf277ec5ef760d4408cab9c9220fab64202e4529fb50eeb20c8527",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "94bb9a2745f9c7baad3c79384bf7d7be312a6ceef6aa7c246dace5ce5c3908fe",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "2f8634c797796a7447616906e80a9f2581f750c2e8341bb6ade8c8154941eb9c",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 9.604598299993086,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "8c94835732219bb2e35383de2cdb734405129450c5147adae32b8472617062c1",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.3953707218170166,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "dc28303f7f934d48a06d59d9af8ac44bfc239b332b17be335423e23cd8597532",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.8591703176498413,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "7b4f4e73ba477a6bd043f3a8b2c4936f1781e5b5de782d69e356fd69f783bdee",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.0980510711669922,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "4e81f8de5adf277ec5ef760d4408cab9c9220fab64202e4529fb50eeb20c8527",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.20143243670463562,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "2f8634c797796a7447616906e80a9f2581f750c2e8341bb6ade8c8154941eb9c",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.1778041571378708,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 13.450401299996884,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "737d05b6b3aaf60ea568a11fe56eb538efb2de06e0919b8da4e269a27d429f1e",
+                        "source": "langgraph/langgraph/channels/last_value.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 5.834591865539551,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "4e81f8de5adf277ec5ef760d4408cab9c9220fab64202e4529fb50eeb20c8527",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 3.5604782104492188,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 3.44269061088562,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "ba44b0b61f663d96e0eba685dc61874a109a332738a81939b31acfab8a1bf6e3",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 3.318011999130249,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "7d8b3dce0bc670b4b72342fb780b173ecbfa4d939630e8b55c17a77a66871a3d",
+                        "source": "langgraph/langgraph/channels/binop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 3.068495750427246,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.960113525390625,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "935c4f994236e5b5236d581f6425da480a97549580de90f3184d0e18523d1967",
+                        "source": "langgraph/langgraph/channels/binop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.8772480487823486,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "af0243ca2b8607a3e4f2fc9c94b820be6145789d979d8ac5cb2cc42ac458a916",
+                        "source": "langgraph/langgraph/channels/any_value.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.775744676589966,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "10056e04b5dadba322e6a5df0d11cf9c7c0aa9a7d9a61798f9b3d54b9a54d67b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.7750542163848877,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "49d6f603a003a5b07462ba5699ebb797c79e53f924e5cd9d7cbc8ddd38aff2bc",
+                        "source": "langgraph/langgraph/channels/last_value.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.7663583755493164,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "790fe3bb8b8f5a401103547530586e3e375b856a6677563c50fc5307cbffb62a",
+                        "source": "langgraph/langgraph/channels/binop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.7475693225860596,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "c1a811e1a8db415a1ae3a5577517a81098c3353c6e32bf5711d271277d6ece20",
+                        "source": "langgraph/langgraph/channels/binop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.7247297763824463,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "7b4f4e73ba477a6bd043f3a8b2c4936f1781e5b5de782d69e356fd69f783bdee",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.6165671348571777,
+                        "rank": 13
+                    }
+                ]
+            }
+        ],
+        "generation_metrics": [
+            {
+                "name": "Initial Generation",
+                "answer": "## What is conflicting\n\n`StateGraph` creates channels for the fields in the graph state. In this example, the parent graph has channels for `a` and `b`. The parent node logically returns only `{\"b\": \"parent-result\"}`, while the child node logically returns only `{\"a\": \"subgraph-result\"}`.\n\nHowever, those logical node return dictionaries are not necessarily the complete set of writes considered by the parent graph. A compiled subgraph is itself a graph execution participating in the parent Pregel step. Because the child subgraph was compiled with the same two-key `State` schema, its state boundary includes the parent-level state shape. **The resulting subgraph update can therefore include a write for `b` as well as its write for `a`, even though the child node body directly returns only `a`.** This explains why the reported key is `b`: the conflicting writes are at the channel/update boundary, not necessarily two explicit `b` assignments in the two node functions.\n\nThe exact subgraph-boundary propagation code is not included in the retrieved context, so that explanation is an inference from the observed error and the use of the same two-key schema. The retrieved context does establish the channel-level rule that causes the failure.\n\n## How parallel writes are applied\n\nThe Pregel execution step accumulates updates from the tasks that run in that step and applies them to the channels for the corresponding state keys. The important distinction is:\n\n- **Logical node writes:** `parent_node` returns a `b` update and `subgraph_node` returns an `a` update.\n- **Channel-level writes:** the parent step applies all writes emitted by the parent node and the compiled subgraph. If both task results contribute an update to the `b` channel, that channel receives two values in one step.\n\n`LastValue.update` accepts no values as a no-op, accepts exactly one value, and raises `InvalidUpdateError` when it receives more than one value in the same update:\n\n```python\nif len(values) != 1:\n    raise InvalidUpdateError(...)\n```\n\nConsequently, the fact that the application conceptually treats `a` and `b` as independent does not prevent an error if two concurrent task results both write to the channel for `b`.\n\n## Why a subgraph can affect `b`\n\nThe child graph was declared with:\n\n```python\nclass State(TypedDict):\n    a: str\n    b: str\n```\n\nThat makes `b` part of the child graph's state schema, even though `subgraph_node` does not explicitly return `b`. The relevant distinction is therefore between a key directly returned by a node and a key included in the state exchanged at a graph boundary. With the same broad schema on both graphs, the subgraph can participate in a parent-level update for `b`.\n\nThis is an inference about the boundary behavior; the retrieved source does not include the subgraph-to-parent write-mapping implementation. It is consistent with the observed `At key 'b'` error and with the fact that `LastValue` rejects multiple channel values.\n\n## Corrected implementation\n\nGive the child graph only the state it actually owns:\n\n```python\nfrom typing import TypedDict\n\nfrom langgraph.graph import END, START, StateGraph\n\n\nclass ParentState(TypedDict):\n    a: str\n    b: str\n\n\nclass ChildState(TypedDict):\n    a: str\n\n\ndef parent_node(state: ParentState) -> dict[str, str]:\n    return {\"b\": \"parent-result\"}\n\n\ndef subgraph_node(state: ChildState) -> dict[str, str]:\n    return {\"a\": \"subgraph-result\"}\n\n\nchild = StateGraph(ChildState)\nchild.add_node(\"child\", subgraph_node)\nchild.add_edge(START, \"child\")\nchild.add_edge(\"child\", END)\nsubgraph = child.compile()\n\n\nbuilder = StateGraph(ParentState)\nbuilder.add_node(\"parent\", parent_node)\nbuilder.add_node(\"subgraph\", subgraph)\nbuilder.add_edge(START, \"parent\")\nbuilder.add_edge(START, \"subgraph\")\nbuilder.add_edge(\"parent\", END)\nbuilder.add_edge(\"subgraph\", END)\n\ngraph = builder.compile()\nresult = graph.invoke({\"a\": \"\", \"b\": \"\"})\nprint(result)\n```\n\nThe child graph now has only the `a` state key. Therefore, its state boundary does not include the unrelated parent key `b`; the parent node writes `b`, and the subgraph writes `a`. Each channel receives one value from this parallel step, so the `LastValue` single-update rule is satisfied.\n\nThe precise final representation of `result` is not shown in the retrieved context, but the relevant updates are `a = \"subgraph-result\"` and `b = \"parent-result\"`.\n\n## Is a reducer on `b` the right fix?\n\nNo—not for this example. The error means that the `b` channel received multiple values during one step. An `Annotated` reducer is appropriate only when multiple concurrent values for the same logical state key are intentional and have a defined merge operation. The `LastValue` error message explicitly points to an `Annotated` key for handling multiple values.\n\nHere, the second `b` write is unintended: the child graph should not own or propagate `b` at all. Adding a reducer would hide that schema-boundary mistake and force the application to merge values that are not semantically competing updates. Isolating the child schema is the smallest correction.\n\nThe retrieved context does not include the reducer declaration syntax or the implementation that maps a subgraph's output schema into the parent schema, so those details cannot be specified more precisely here. It does establish that `LastValue` rejects multiple values and that a channel designed to accept multiple values must use different channel semantics, rather than relying on `LastValue`'s single-value behavior.",
+                "answer_length": 5512,
+                "prompt_tokens": 5474,
+                "completion_tokens": 1971,
+                "total_tokens": 7445,
+                "estimated_cost": 0.00346,
+                "generation_latency": 18.763494300001184,
+                "is_complete": false,
+                "round_number": null,
+                "gaps_detected": [
+                    "Compiled-subgraph state-to-parent write mapping"
+                ]
+            },
+            {
+                "name": "Gap Generation Round 1",
+                "answer": "## What is conflicting\n\nThe error is raised by the `LastValue.update` channel:\n\n```python\nif len(values) != 1:\n    raise InvalidUpdateError(\n        \"At key ... Can receive only one value per step. ...\"\n    )\n```\n\nThis means that the channel associated with `b` received more than one value during one Pregel execution step. It does **not** necessarily mean that two application nodes explicitly returned `{\"b\": ...}`.\n\n## Logical keys versus channel-level writes\n\nAt the application level, the two tasks appear independent:\n\n- `parent_node` returns `{\"b\": \"parent-result\"}`.\n- `subgraph_node` returns `{\"a\": \"subgraph-result\"}`.\n\nHowever, LangGraph executes graph work in steps and applies the writes accumulated by the tasks in that step to the graph's channels. The `LastValue` channel is then called with a sequence of values received for that channel. It accepts no values or exactly one value, and rejects multiple values.\n\nTherefore, the relevant question is not only “which key did each node return?” It is also “which channel-level writes did the parent Pregel step receive from each task?”\n\nThe observed error establishes that the parent `b` channel received multiple writes in the same step. The retrieved excerpts do not include the subgraph-to-parent write-mapping implementation, so the exact internal propagation path is not shown here. Given the behavior in the example, the subgraph compiled with the full `State` schema is participating in the parent update for `b` as well as for `a`. This is an inference from the reported error and the schema definitions, not a directly shown implementation detail.\n\n## Why `Annotated` is sometimes required\n\nA normal state key uses a single-value channel such as `LastValue`. Multiple writes to that channel in one step are invalid, as shown by `LastValue.update`.\n\nA reducer is appropriate only when multiple concurrent values for the same logical state key are valid and the application has defined how to combine them. In that case, the key can be declared with an `Annotated` reducer so that it uses an aggregation channel rather than the single-value behavior.\n\nFor example, a reducer would be conceptually appropriate for a key whose values should be accumulated or combined. It is **not** appropriate merely to suppress this error when one of the writes is an unintended state propagation caused by using an overly broad subgraph schema. Adding a reducer to `b` could hide the schema/update mistake and would also require a meaningful rule for combining `\"parent-result\"` with the unwanted value.\n\n## Corrected code\n\nGive the child graph only the state that it is intended to read and write:\n\n```python\nfrom typing import TypedDict\n\nfrom langgraph.graph import END, START, StateGraph\n\n\nclass ParentState(TypedDict):\n    a: str\n    b: str\n\n\nclass ChildState(TypedDict):\n    a: str\n\n\ndef parent_node(state: ParentState):\n    return {\"b\": \"parent-result\"}\n\n\ndef subgraph_node(state: ChildState):\n    return {\"a\": \"subgraph-result\"}\n\n\nchild_builder = StateGraph(ChildState)\nchild_builder.add_node(\"child\", subgraph_node)\nchild_builder.add_edge(START, \"child\")\nchild_builder.add_edge(\"child\", END)\nchild = child_builder.compile()\n\n\nbuilder = StateGraph(ParentState)\nbuilder.add_node(\"parent\", parent_node)\nbuilder.add_node(\"subgraph\", child)\nbuilder.add_edge(START, \"parent\")\nbuilder.add_edge(START, \"subgraph\")\nbuilder.add_edge(\"parent\", END)\nbuilder.add_edge(\"subgraph\", END)\n\ngraph = builder.compile()\n\nresult = graph.invoke({\"a\": \"\", \"b\": \"\"})\n```\n\nThe important change is that the child graph is built with `ChildState`, which contains only `a`; it is not built with the parent schema containing both `a` and `b`.\n\nAs an inference from the reported behavior, this prevents the child subgraph from contributing an unrelated `b` channel update to the parent step. The parent node remains the only logical writer of `b`, so the parent `b` channel receives one value and `LastValue.update` succeeds. No reducer is needed for either key in this example because the intended semantics are one value per key per step.",
+                "answer_length": 4073,
+                "prompt_tokens": 5485,
+                "completion_tokens": 1713,
+                "total_tokens": 7198,
+                "estimated_cost": 0.0031526,
+                "generation_latency": 17.123465999990003,
+                "is_complete": false,
+                "round_number": 1,
+                "gaps_detected": [
+                    "Subgraph state-to-parent channel write mapping"
+                ]
+            },
+            {
+                "name": "Gap Generation Round 2",
+                "answer": "## Channel-level behavior\n\n`StateGraph` state keys are backed by channels. The implementation of `LastValue.update` shows that its channel accepts no more than one value in a single update step:\n\n```python\nif len(values) != 1:\n    raise InvalidUpdateError(...)\n```\n\nTherefore, the error means that the channel associated with key `b` received two values during the same Pregel step. It does **not** necessarily mean that two application nodes explicitly returned `{\"b\": ...}`.\n\nThe important distinction is:\n\n- A node logically returns updates for state keys, such as `parent_node` returning `b` and `subgraph_node` returning `a`.\n- The Pregel execution step accumulates writes from all tasks that run in that step and applies them to channels.\n- A channel validates the complete collection of values it receives for that step.\n\n`LastValue` rejects multiple values. By contrast, `AnyValue.update` accepts multiple values and stores the last value in its input sequence. A channel backed by a binary operator can aggregate values using that operator. Thus, whether concurrent writes are valid is determined by the channel's update semantics, not only by whether the application considers the logical keys to be independent.\n\n## Why the subgraph can affect `b`\n\nThe retrieved implementation does not include the Pregel write-collection code or the subgraph-boundary code, so it does not directly show the exact operation that forwards the second `b` value. However, the observed error establishes that two values reached the `b` channel in the step containing `parent` and `subgraph`.\n\nGiven the shown code, the relevant design issue is that both the parent graph and the child graph use the same `State` schema. The child graph therefore has `b` as part of its state interface even though its node only intends to update `a`. At the graph boundary, the subgraph participates in the parent step's channel updates; it is not treated merely as an isolated function that can only affect keys visibly returned by its innermost node.\n\nThis explains the apparent discrepancy: `subgraph_node` writes logical key `a`, but the compiled subgraph can still contribute a state update involving the shared `b` channel. That contribution is concurrent with `parent_node`'s write to `b`, so `LastValue` sees multiple values for `b` and raises `InvalidUpdateError`.\n\nThe statement about the boundary is an inference from the observed error and the shared-schema setup; the retrieved context does not contain the implementation that performs this propagation.\n\n## Corrected code\n\nGive the child graph a schema containing only the state it owns:\n\n```python\nfrom typing import TypedDict\n\nfrom langgraph.graph import END, START, StateGraph\n\n\nclass State(TypedDict):\n    a: str\n    b: str\n\n\nclass ChildState(TypedDict):\n    a: str\n\n\ndef parent_node(state: State):\n    return {\"b\": \"parent-result\"}\n\n\ndef subgraph_node(state: ChildState):\n    return {\"a\": \"subgraph-result\"}\n\n\nchild = StateGraph(ChildState)\nchild.add_node(\"child\", subgraph_node)\nchild.add_edge(START, \"child\")\nchild.add_edge(\"child\", END)\nsubgraph = child.compile()\n\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"parent\", parent_node)\nbuilder.add_node(\"subgraph\", subgraph)\nbuilder.add_edge(START, \"parent\")\nbuilder.add_edge(START, \"subgraph\")\nbuilder.add_edge(\"parent\", END)\nbuilder.add_edge(\"subgraph\", END)\n\ngraph = builder.compile()\nresult = graph.invoke({\"a\": \"\", \"b\": \"\"})\n```\n\nThe child schema restricts the subgraph's state interface to `a`. Consequently, the subgraph should not propagate an unrelated `b` update into the parent graph's `b` channel. The parent node remains the sole writer of `b` in that step, so the `LastValue` constraint is satisfied.\n\nThe retrieved `_coerce_state` implementation also shows that state inputs are constructed from the selected schema:\n\n```python\ndef _coerce_state(schema, input):\n    return schema(**input)\n```\n\nThis is consistent with using a narrower schema for the child, although the retrieved context does not provide the complete subgraph input/output mapping implementation.\n\n## Is a reducer on `b` the right fix?\n\nNo—not for this example. A reducer is appropriate only when multiple concurrent values for the same logical state key are intentional and the state semantics define how to combine them. For example, an aggregate channel may use a binary operator, while `LastValue` deliberately rejects multiple values.\n\nHere, `parent_node` is intended to write `b`, while the subgraph is intended to write `a`. The second `b` update is therefore unintended. Adding an `Annotated` reducer to `b` would merely make the channel accept or combine an update that should not have been emitted; it could also discard or merge values according to semantics that the application never intended.\n\nThe appropriate correction is to isolate the child schema so that the subgraph does not participate in the parent graph's unrelated `b` channel. Use a reducer on `b` only if the application genuinely wants multiple parallel tasks to write `b` and has a defined combination rule for those values.",
+                "answer_length": 5079,
+                "prompt_tokens": 5653,
+                "completion_tokens": 1854,
+                "total_tokens": 7507,
+                "estimated_cost": 0.0033554,
+                "generation_latency": 18.446804199993494,
+                "is_complete": false,
+                "round_number": 2,
+                "gaps_detected": [
+                    "Pregel subgraph state-boundary write propagation"
+                ]
+            }
+        ],
+        "judge_evaluation": {
+            "correctness": {
+                "score": 5.0,
+                "justification": "The answer correctly identifies the cause of the error based on the LastValue channel's behavior, provides a logically sound explanation for subgraph interaction (with acknowledged inference), and offers a correct and well-explained code fix. The advice on when to use a reducer is also accurate."
+            },
+            "groundedness": {
+                "score": 3.0,
+                "justification": "While many claims are directly supported by the context (e.g., LastValue.update, AnyValue.update, _coerce_state), the central explanation for why the subgraph contributes to the 'b' channel update relies on an inference about subgraph state propagation at the boundary. This inference, though reasonable and acknowledged, is not directly supported by explicit code showing this mechanism in the retrieved context."
+            },
+            "completeness": {
+                "score": 5.0,
+                "justification": "The answer thoroughly addresses all aspects of the user's question, including explaining the error, channel behavior, subgraph participation, reducer conditions, distinguishing logical vs. channel writes, providing corrected code, and explaining the fix. All expected concepts are covered."
+            },
+            "hallucination": {
+                "score": 0.0,
+                "justification": "The answer does not introduce any fabricated technical claims or APIs. It clearly labels inferences where direct evidence from the retrieved context is not available, demonstrating a high degree of honesty and adherence to the provided information."
+            },
+            "missing_concepts": [],
+            "unsupported_claims": [
+                "At the graph boundary, the subgraph participates in the parent step's channel updates; it is not treated merely as an isolated function that can only affect keys visibly returned by its innermost node."
+            ]
+        },
+        "overall_metrics": {
+            "total_latency": 136.46342729999742,
+            "total_cost": 0.0232289,
+            "recall_at_k": 0.4166666666666667,
+            "precision_at_k": 0.5714285714285714,
+            "hit_rate": 1.0,
+            "mrr": 1.0
+        }
+    }
+]

@@ -3,6 +3,7 @@ from langchain_chroma import Chroma
 
 from models.query_input import QueryInput
 from models.retrieval_plan import RetrievalPlan
+from models.evidence import EvidenceItem
 
 from retrieval.base import BaseRetriever
 from retrieval.hybrid_retriever import HybridRetriever
@@ -10,9 +11,11 @@ from retrieval.multi_query_retrieval_strategy import MultiQueryRetrievalStrategy
 from retrieval.metadata_retrieval import exact_match_retrieve, has_entity_filter
 from retrieval.multi_corpus_retriever import MultiCorpusRetriever
 
+from reranking.base_reranker import BaseReranker
+
 from evaluation.observer import PipelineObserver
 
-from config import GAP_HYBRID_TOP_K
+from config import GAP_HYBRID_TOP_K, RERANK_TOP_K
 
 
 def build_rerank_query(q: QueryInput) -> str:
@@ -29,6 +32,14 @@ def build_rerank_query(q: QueryInput) -> str:
         parts.append(f"Logs: {q.logs}")
     return "\n\n".join(parts)
 
+def _append_code_snippet(retrieval_query: str, query_input: QueryInput | None) -> str:
+    if query_input is not None and query_input.code_snippet:
+        return (
+            f"{retrieval_query}\n\n"
+            f"Code:\n{query_input.code_snippet}"
+        )
+
+    return retrieval_query
 
 def _dedupe(docs: list[Document]) -> list[Document]:
     seen = set()
@@ -82,20 +93,33 @@ def retrieve_candidates(
             candidates = retriever.retrieve(query, observer, plan.metadata_filters)
 
     elif plan.retrieval_mode == "combined_query":
+        final_query = _append_code_snippet(plan.combined_query, query_input)
         candidates = retriever.retrieve(
-            plan.combined_query, observer, plan.metadata_filters
+            final_query, observer, plan.metadata_filters
         )
 
     elif plan.retrieval_mode == "multi_query_fusion":
+        # Add code_snippet to each subquery
+        subqueries = [_append_code_snippet(q, query_input) for q in plan.sub_queries]
         candidates = multi_query_strategy.retrieve(
-            plan.sub_queries, retriever, plan.metadata_filters, observer
+            subqueries, retriever, plan.metadata_filters, observer
         )
 
     else:
         raise ValueError(f"Unknown retrieval_mode: {plan.retrieval_mode}")
 
+    print(
+        f"[RETRIEVAL] mode={plan.retrieval_mode} "
+        f"candidates before exact={len(candidates)}"
+    )
+
     if has_entity_filter(plan.metadata_filters):
         exact_matches = exact_match_retrieve(plan.metadata_filters, code_vector_store)
+        print(f"[EXACT MATCH] added={len(exact_matches)}")
         candidates = exact_matches + candidates
 
-    return _dedupe(candidates)
+    print(f"[RETRIEVAL] before dedupe={len(candidates)}")
+    candidates = _dedupe(candidates)
+    print(f"[RETRIEVAL] after dedupe={len(candidates)}")
+
+    return candidates

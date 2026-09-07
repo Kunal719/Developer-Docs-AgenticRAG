@@ -1,0 +1,2540 @@
+[
+    {
+        "question": {
+            "question": "Three tools are executed in parallel by ToolNode and each tool calls interrupt(). All three tools reach their interrupt, but the checkpoint state contains fewer interrupts than expected and, after resuming with the captured interrupt map, a resume value can be delivered to the wrong tool. Trace how interrupt exceptions are collected from parallel tasks, how pending interrupts are stored in task/checkpoint state, how interrupt namespaces and IDs are associated with individual tasks, and how the resume map is matched back to the task that originally raised each interrupt.",
+            "code_snippet": "from langgraph.prebuilt import ToolNode\nfrom langgraph.types import interrupt, Command\nfrom langgraph.checkpoint.memory import InMemorySaver\n\n\ndef create_circle():\n    return interrupt({\"tool\": \"circle\", \"question\": \"approve circle?\"})\n\ndef create_square():\n    return interrupt({\"tool\": \"square\", \"question\": \"approve square?\"})\n\ndef create_triangle():\n    return interrupt({\"tool\": \"triangle\", \"question\": \"approve triangle?\"})\n\n# A ToolNode receives three tool calls in the same graph step.\n# All three tools reach interrupt().\n# The application reads graph.get_state(config).tasks and constructs:\n# Command(resume={interrupt_id: response})",
+            "error": null,
+            "logs": null,
+            "observed_behavior": "Only some parallel interrupts may be exposed or a resume value may be associated with the wrong tool.",
+            "expected_behavior": "Every pending interrupt should remain associated with its originating task and resume value.",
+            "id": 25,
+            "category": "debugging",
+            "intent": "parallel_tool_interrupt_collection_and_resume",
+            "difficulty": "very_hard",
+            "expected_files": [
+                "interrupts.mdx",
+                "langgraph/langgraph/types.py",
+                "prebuilt/langgraph/prebuilt/tool_node.py",
+                "prebuilt/langgraph/prebuilt/interrupt.py",
+                "langgraph/langgraph/pregel/_loop.py",
+                "langgraph/langgraph/pregel/_algo.py",
+                "langgraph/langgraph/pregel/_runner.py"
+            ],
+            "concepts": [
+                "ToolNode",
+                "parallel execution",
+                "pending interrupts",
+                "task state",
+                "resume mapping",
+                "interrupt namespace"
+            ],
+            "tags": [
+                "ToolNode",
+                "parallel_interrupts",
+                "pending_interrupts",
+                "resume",
+                "task_mapping"
+            ],
+            "evidence": null,
+            "queries": [
+                "How does ToolNode execute multiple tool calls concurrently?",
+                "Where does LangGraph collect interrupts raised by parallel tasks?",
+                "How are pending interrupts stored in Pregel task state?",
+                "How does LangGraph map a resume value back to the task that raised an interrupt?",
+                "How do interrupt namespaces distinguish parallel tool executions?",
+                "Why could a resume value be delivered to the wrong parallel tool?"
+            ]
+        },
+        "final_answer": "## Retrieved facts\n\n1. **Each tool invocation raises its own `GraphInterrupt`.**\n   `interrupt(value)` obtains the current task's scratchpad and increments that task's interrupt counter. If no resume value is available for the current interrupt index, it raises:\n\n   ```python\n   GraphInterrupt((Interrupt.from_ns(value=value, ns=checkpoint_ns),))\n   ```\n\n   The `Interrupt` ID is derived from the task's checkpoint namespace by `Interrupt.from_ns()`:\n\n   ```python\n   id = xxh3_128_hexdigest(ns.encode())\n   ```\n\n   Therefore, the namespace used for the interrupt is the identity source for its ID. The `interrupt_id` property is only a deprecated alias for `id`.\n\n2. **Interrupt ordering is local to a task.**\n   The `interrupt()` docstring states that, when a node contains multiple interrupts, resume values are matched by their order in that node. The resume list is scoped to the specific task executing the node and is not shared across tasks. Consequently, the interrupt counter and resume-index lookup are task-local; they are not one global counter shared by the three parallel tools.\n\n3. **The interrupt is propagated out of task execution rather than retried.**\n   `run_with_retry()` invokes the task and has a special `except GraphBubbleUp` path that re-raises the exception. The shown retry handler only retries ordinary exceptions selected by a retry policy; it does not retry a `GraphInterrupt` through the ordinary exception path.\n\n4. **The parallel runner collects interrupts from completed tasks.**\n   `_panic_or_proceed()` examines completed futures. For an exception that is a `GraphInterrupt`, it appends the exception to a local `interrupts` list instead of immediately re-raising it. After examining the completed futures, it raises one combined `GraphInterrupt` containing the flattened interrupt payloads from the collected exceptions:\n\n   ```python\n   raise GraphInterrupt(tuple(i for exc in interrupts for i in exc.args[0]))\n   ```\n\n   If any non-interrupt exception is encountered while `panic=True`, pending futures are cancelled and that exception is re-raised. Thus, the code shown has a single aggregation point for interrupts, but it does not show an ordering guarantee for iterating the `done` set. Since `done` is a set, the order in which parallel task exceptions are collected is not established by this code.\n\n5. **The loop suppresses the combined interrupt at the top-level graph.**\n   `PregelLoop._suppress_interrupt()` recognizes a top-level `GraphInterrupt`, extracts all `Interrupt` objects from `exc_value.args[0]`, emits an `interrupt` lifecycle event, applies pending writes where applicable, and saves the final output. It returns `True`, suppressing propagation of the exception to the caller as an ordinary error.\n\n6. **Checkpointing is required.**\n   The `interrupt()` documentation explicitly says that a checkpointer must be enabled because interrupt handling relies on persisting graph state. The example compiles the graph with `InMemorySaver` and resumes using a `Command` carrying a resume value.\n\n7. **A resume command becomes a `RESUME` pending write.**\n   `map_command()` maps `cmd.resume` to:\n\n   ```python\n   (NULL_TASK_ID, RESUME, cmd.resume)\n   ```\n\n   It does not itself show how a dictionary keyed by interrupt ID is converted into per-task resume lists. The actual lookup shown in `interrupt()` is by the current task's interrupt index:\n\n   ```python\n   if idx < len(scratchpad.resume):\n       return scratchpad.resume[idx]\n   ```\n\n   The function also appends a newly available resume value to that task's resume list and sends the updated list through the configured send mechanism.\n\n## Trace for the three parallel tools\n\n- ToolNode's `_arun_one()` constructs a `ToolCallRequest` for each call and executes the tool through `_execute_tool_async()` when no wrapper is configured, or through the configured wrapper otherwise. The provided code does not include the implementation that schedules the three `_arun_one()` calls, but the question establishes that they execute in parallel.\n- `create_circle()`, `create_square()`, and `create_triangle()` each reach `interrupt()`. Each invocation consults its own task scratchpad. With no resume value available at index zero, each raises a `GraphInterrupt` containing an `Interrupt` whose ID is derived from that task's checkpoint namespace.\n- The parallel runner observes the three failed futures. `_panic_or_proceed()` collects their `GraphInterrupt` objects and raises one combined `GraphInterrupt` containing the collected `Interrupt` objects.\n- At the loop boundary, `_suppress_interrupt()` extracts that combined sequence and persists/emits the interrupt information as part of the interrupted graph state.\n\n## What the shown code does and does not establish about the symptom\n\nThe code establishes that interrupt identity is task-based through the checkpoint namespace, while resume lookup inside `interrupt()` is positional within the current task. It also establishes that parallel interrupts are first aggregated into a flat sequence.\n\nThe shown `_panic_or_proceed()` implementation does **not** preserve an explicit task-to-interrupt mapping while aggregating: it iterates a `set` of completed futures and appends only the interrupt payloads. Therefore, the retrieved context does not establish a deterministic ordering of the combined interrupt sequence relative to the originating tools.\n\nHowever, that alone does not prove that a correct interrupt-ID-to-task resume map will be misrouted. The missing checkpoint/task-state code would need to show how the persisted interrupt records are associated with tasks and how a dictionary such as `{interrupt_id: response}` is transformed into the scratchpad resume list for the appropriate task. In the code shown, `interrupt()` ultimately consumes a task-local list by index; it does not perform an ID lookup itself.\n\nThus, if the resume map is correctly routed to each originating task before `interrupt()` runs again, the task-local ordering can preserve the association. If the map is instead flattened or assigned according to the nondeterministic aggregate order, a response can be delivered to the wrong tool—but that routing failure is an inference from the shown mechanisms, not a behavior directly demonstrated by the retrieved code.\n\n## Conclusion\n\nThe central separation is:\n\n- **Interrupt ID/namespace:** associated with the task through `CONFIG_KEY_CHECKPOINT_NS` and `Interrupt.from_ns()`.\n- **Resume matching inside a task:** positional, using that task's scratchpad interrupt counter and resume list.\n- **Parallel aggregation:** a flat combined `GraphInterrupt` assembled by iterating completed futures stored in a set.\n- **Checkpoint persistence and external resume-map routing:** required to explain exactly why interrupts are missing or why a response is assigned to another tool, but those implementations are not included in the retrieved context.\n\nThe expected invariant—every pending interrupt remains tied to its originating task—cannot be verified from the supplied excerpts because the task checkpoint serialization and ID-keyed resume routing are absent.",
+        "experiment_metadata": {
+            "version": "v7",
+            "timestamp": "2026-08-31T19:04:30.460490",
+            "embedding_model": "text-embedding-3-small",
+            "llm_provider": "openai",
+            "llm": "gpt-5.6-luna",
+            "chunk_size": 1200,
+            "chunk_overlap": 200,
+            "dense_top_k": 10,
+            "bm25_top_k": 10,
+            "hybrid_top_k": 16,
+            "rrf_k": 60,
+            "reranker_top_k": 13,
+            "reranker_name": "BAAI/bge-reranker-base",
+            "judge_model": "gemini-2.5-flash",
+            "judge_llm_provider": "google_genai",
+            "router_llm": "gpt-5.6-luna",
+            "router_llm_provider": "openai"
+        },
+        "router_metrics": {
+            "name": "Query Router",
+            "prompt_tokens": 1819,
+            "completion_tokens": 318,
+            "total_tokens": 2137,
+            "estimated_cost": 0.0007454,
+            "router_latency": 6.184613500023261
+        },
+        "retrieval_plan": {
+            "retrieval_mode": "multi_query_fusion",
+            "reasoning": "This is a multi-hop internal-runtime question spanning parallel task execution, interrupt aggregation, checkpoint task state, namespace/ID generation, and resume-map routing across different implementation areas. Exact metadata matches should guarantee retrieval for the named APIs and classes.",
+            "sub_queries": [
+                "How are interrupt exceptions collected and aggregated from parallel graph or ToolNode tasks",
+                "How are pending interrupts stored in task state and checkpoint state after a parallel superstep",
+                "How are interrupt namespaces and IDs generated and associated with individual execution tasks",
+                "How does Command resume matching map interrupt IDs back to the task that raised them",
+                "How does ToolNode execute parallel tools and propagate multiple interrupts through the graph runtime"
+            ],
+            "combined_query": null,
+            "metadata_filters": {
+                "corpus": "implementation",
+                "module_names": null,
+                "class_names": [
+                    "ToolNode",
+                    "InMemorySaver"
+                ],
+                "function_names": [
+                    "interrupt"
+                ],
+                "category": null
+            }
+        },
+        "pipeline_stages": [
+            {
+                "name": "Multi Query Fusion",
+                "latency": 2.731201999995392,
+                "top_k": 40,
+                "documents": [
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.0819672131147541,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.07673337752628798,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.07568265068265068,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.07560931899641576,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "93bb2bebf5b7f979691792a3dac08aeed463c7f649bf9fdd8fd4f29fd10f4bf3",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.07451415153686729,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.07112890922959572,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "b17c43be80a3f885e076a666d68a291ba76b1ce1fcf584458e47f5d19462ff84",
+                        "source": "langgraph/langgraph/errors.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.05850548552754435,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "f273a0bcdcf7e54a09a18112e7a22e21107db317b485adbbba32087e7977b6e4",
+                        "source": "langgraph/langgraph/graph/message.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.0555868544600939,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "b1c72864853fae07e0f43ccfd9038724c66d1f7f2c6df824dc768a52b601d320",
+                        "source": "prebuilt/langgraph/prebuilt/chat_agent_executor.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.05481510064955946,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.045535714285714284,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "81afc5c69a7df48cb9a455e163f24449ab317dfac8da7c1e697f494ac2aa1153",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.04538690476190476,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "ed115ef84bff05191c63d57f3297bd5161b5fba6bb6a387197d821036c08f404",
+                        "source": "langgraph/langgraph/errors.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.0439928093478478,
+                        "reranker_score": null,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "4b652e875ba10f45a0216b7bebe172b08c9a69712eb6871f6c19ff4c4bf36a6f",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.04114223915954269,
+                        "reranker_score": null,
+                        "rank": 13
+                    },
+                    {
+                        "chunk_id": "db017121df9642d752b51dea9d07928212272e01cca5add25c9ede3c7ea0dcd4",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.02967032967032967,
+                        "reranker_score": null,
+                        "rank": 14
+                    },
+                    {
+                        "chunk_id": "41d9a66c66c0e8c045b60801a23454b8850c46a8dffef67370641fe625d4566f",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.0288981288981289,
+                        "reranker_score": null,
+                        "rank": 15
+                    },
+                    {
+                        "chunk_id": "4e48f311c58a1d2323aeab32c2d5cfc361104a6f71ae4cbe494b301e3778fccf",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.028665028665028666,
+                        "reranker_score": null,
+                        "rank": 16
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.028665028665028666,
+                        "reranker_score": null,
+                        "rank": 17
+                    },
+                    {
+                        "chunk_id": "e6b6b973910b575a3c160c033f4f98f3584e6767dc3e27066d00f0d77bcb30dc",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.027212143650499815,
+                        "reranker_score": null,
+                        "rank": 18
+                    },
+                    {
+                        "chunk_id": "8d368f4baf77105c5feccebfaada3c1644b547420321cb9fb164eb54635dc836",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.026856524873828405,
+                        "reranker_score": null,
+                        "rank": 19
+                    },
+                    {
+                        "chunk_id": "f965b1708501b94a5f16e337af08397897e89d129e411659066c5f62286e652b",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 20
+                    },
+                    {
+                        "chunk_id": "6124cf47036aa55938c1e05846df66f71eaa51d7a48842d3c22affbf0d4b4f4f",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 21
+                    },
+                    {
+                        "chunk_id": "2befe131ce0064602af2ba118fef43a1cd8dcf8fb82d60851da863711b46024c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 22
+                    },
+                    {
+                        "chunk_id": "e112b6811e4dfa21bb47263faa20821784d60b2b25b2f11992586e91c86bd417",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 23
+                    },
+                    {
+                        "chunk_id": "f552a7a71e53be7e9419059793e82beb94014bf6d1e638c4a2bbec6876b6058f",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 24
+                    },
+                    {
+                        "chunk_id": "6976d30ccd2164e8fc86c3ca2a411f01bf67574c666ff37254500d96af755d11",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 25
+                    },
+                    {
+                        "chunk_id": "30a237e5426f57c476478f8c11fb940087c0075e3d2f19d381b65569549c0efe",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 26
+                    },
+                    {
+                        "chunk_id": "b4f83da8c133d7e7cc8e206126302ede6a032498314a33c6c6c7d8d39098fd92",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014492753623188406,
+                        "reranker_score": null,
+                        "rank": 27
+                    },
+                    {
+                        "chunk_id": "2e37fc921f0150660954d7b77cdf06972ac8d31539f5350f82c0e62c4f6bbb49",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014285714285714285,
+                        "reranker_score": null,
+                        "rank": 28
+                    },
+                    {
+                        "chunk_id": "92b0c9ef91d9641d46a06c139043ba624f31ce90e47fa1f323dc2df88c9eab64",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.013888888888888888,
+                        "reranker_score": null,
+                        "rank": 29
+                    },
+                    {
+                        "chunk_id": "38185ed2094975b242beb756ddb2596b7b7579921557173a8dab38365c4d712f",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.013513513513513514,
+                        "reranker_score": null,
+                        "rank": 30
+                    },
+                    {
+                        "chunk_id": "405b09285d892fa0598345ef7b8cec1ce753dc5a404bcbd6c3deceaff632a4d4",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.013333333333333334,
+                        "reranker_score": null,
+                        "rank": 31
+                    },
+                    {
+                        "chunk_id": "deca5e178a82c996ca4be0e1fa1a3563a2b3ab174f51a0e3ee107dac2d57e4c9",
+                        "source": "checkpoint/langgraph/store/base/embed.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.013333333333333334,
+                        "reranker_score": null,
+                        "rank": 32
+                    },
+                    {
+                        "chunk_id": "1753e2c35cc0df8150262b02368ab64d3e8b342a26a2591eaed6705708f00c33",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.013157894736842105,
+                        "reranker_score": null,
+                        "rank": 33
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 4.734685699979309,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "db017121df9642d752b51dea9d07928212272e01cca5add25c9ede3c7ea0dcd4",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 4.0112786293029785,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "38185ed2094975b242beb756ddb2596b7b7579921557173a8dab38365c4d712f",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 3.233391761779785,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "f552a7a71e53be7e9419059793e82beb94014bf6d1e638c4a2bbec6876b6058f",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.4108264446258545,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "4e48f311c58a1d2323aeab32c2d5cfc361104a6f71ae4cbe494b301e3778fccf",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.752372145652771,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "4b652e875ba10f45a0216b7bebe172b08c9a69712eb6871f6c19ff4c4bf36a6f",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.6740294694900513,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "81afc5c69a7df48cb9a455e163f24449ab317dfac8da7c1e697f494ac2aa1153",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.6644983291625977,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "93bb2bebf5b7f979691792a3dac08aeed463c7f649bf9fdd8fd4f29fd10f4bf3",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.2840666770935059,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "e112b6811e4dfa21bb47263faa20821784d60b2b25b2f11992586e91c86bd417",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.0533223152160645,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.6650380492210388,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "b4f83da8c133d7e7cc8e206126302ede6a032498314a33c6c6c7d8d39098fd92",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.615729570388794,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "dd68c5c7e64f341d3604ac7dbf3da5beb0363df335f06048f3c02249b5eafe30",
+                        "source": "checkpoint/langgraph/checkpoint/memory/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.5575234293937683,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "2befe131ce0064602af2ba118fef43a1cd8dcf8fb82d60851da863711b46024c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.24854162335395813,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.20967088639736176,
+                        "rank": 13
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.004526500008068979,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "40e4af1424020abe148b1fb8a70779ef79c7cf3861ce10449b63eacc2b59707f",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2befe131ce0064602af2ba118fef43a1cd8dcf8fb82d60851da863711b46024c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "963f55c9f14bb556ee9ebd745c7f4811a99f4218b848cf9876a9d6b4f8fc8413",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b17c43be80a3f885e076a666d68a291ba76b1ce1fcf584458e47f5d19462ff84",
+                        "source": "langgraph/langgraph/errors.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d1c18673fcc0d66a010f355e0a36daea325a63f19d9f2c4f558f2461efdb96c1",
+                        "source": "prebuilt/langgraph/prebuilt/chat_agent_executor.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "fdaf3b6bf05111fed1bb3c2376644f88a8567bc6132679938450f9fdd516555b",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "30a237e5426f57c476478f8c11fb940087c0075e3d2f19d381b65569549c0efe",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "fea369e5ab94ced83a47975d53a0098443d6b2690131c6860799ca9c4a6ee4ea",
+                        "source": "langgraph/langgraph/pregel/_executor.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5feddb7d1152ab3d009f7473fd32810fd270d11243c35ba3c4f1643bbbf6ae7e",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 2.4691062000056263,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "cca4d09973d666b17c4a81fc9c28510078a97eec81342539adcc246ac62346f0",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f6acf610d423b2690a0bd9ebee11b1dab3fd6f8a9c364bcf2d5cb977a98ef2e5",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b17c43be80a3f885e076a666d68a291ba76b1ce1fcf584458e47f5d19462ff84",
+                        "source": "langgraph/langgraph/errors.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4e48f311c58a1d2323aeab32c2d5cfc361104a6f71ae4cbe494b301e3778fccf",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "427e79bda659cbc116459e5702b22ca8d9705a5ef3096210a9f6f35de8d77bc3",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "963f55c9f14bb556ee9ebd745c7f4811a99f4218b848cf9876a9d6b4f8fc8413",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4e7f9ebd68d57f335011ada12fb58f2a90cc59015759fe7f4cda433430ed7095",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.390001413412392e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "b17c43be80a3f885e076a666d68a291ba76b1ce1fcf584458e47f5d19462ff84",
+                        "source": "langgraph/langgraph/errors.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03125,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "963f55c9f14bb556ee9ebd745c7f4811a99f4218b848cf9876a9d6b4f8fc8413",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03036576949620428,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.029877369007803793,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "40e4af1424020abe148b1fb8a70779ef79c7cf3861ce10449b63eacc2b59707f",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "cca4d09973d666b17c4a81fc9c28510078a97eec81342539adcc246ac62346f0",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "2befe131ce0064602af2ba118fef43a1cd8dcf8fb82d60851da863711b46024c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "f6acf610d423b2690a0bd9ebee11b1dab3fd6f8a9c364bcf2d5cb977a98ef2e5",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 3.268861399992602,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.139652967453003,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "cca4d09973d666b17c4a81fc9c28510078a97eec81342539adcc246ac62346f0",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.321077585220337,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "2befe131ce0064602af2ba118fef43a1cd8dcf8fb82d60851da863711b46024c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.1292223930358887,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "2db9971c8f732f352a900378edbf32c94765942a01d9b4010e86ce648e2fc41c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.0672774612903595,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "963f55c9f14bb556ee9ebd745c7f4811a99f4218b848cf9876a9d6b4f8fc8413",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.04906388372182846,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.007198400009656325,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "40e4af1424020abe148b1fb8a70779ef79c7cf3861ce10449b63eacc2b59707f",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "963f55c9f14bb556ee9ebd745c7f4811a99f4218b848cf9876a9d6b4f8fc8413",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5feddb7d1152ab3d009f7473fd32810fd270d11243c35ba3c4f1643bbbf6ae7e",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "93bb2bebf5b7f979691792a3dac08aeed463c7f649bf9fdd8fd4f29fd10f4bf3",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b17c43be80a3f885e076a666d68a291ba76b1ce1fcf584458e47f5d19462ff84",
+                        "source": "langgraph/langgraph/errors.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c533d07d9b00392931af6bf7b5b5b79dd0a284f26bc4f1e1e9b1f3a74ce42fef",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "071de53ffba3d8630eb5f6af2b754df99ce4dcf5ffe8c5cd7ad6c4c7868cbdb7",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 2.1958875999844167,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "db017121df9642d752b51dea9d07928212272e01cca5add25c9ede3c7ea0dcd4",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b17c43be80a3f885e076a666d68a291ba76b1ce1fcf584458e47f5d19462ff84",
+                        "source": "langgraph/langgraph/errors.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f552a7a71e53be7e9419059793e82beb94014bf6d1e638c4a2bbec6876b6058f",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ed115ef84bff05191c63d57f3297bd5161b5fba6bb6a387197d821036c08f404",
+                        "source": "langgraph/langgraph/errors.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0de7486956738b1e400aa6da78e63c124c6c17f185aa59cd2a5ee7aa344e0441",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4e48f311c58a1d2323aeab32c2d5cfc361104a6f71ae4cbe494b301e3778fccf",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.1000021155923605e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.032266458495966696,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03128054740957967,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "b17c43be80a3f885e076a666d68a291ba76b1ce1fcf584458e47f5d19462ff84",
+                        "source": "langgraph/langgraph/errors.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.030834914611005692,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.030798389007344232,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "db017121df9642d752b51dea9d07928212272e01cca5add25c9ede3c7ea0dcd4",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "f552a7a71e53be7e9419059793e82beb94014bf6d1e638c4a2bbec6876b6058f",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "40e4af1424020abe148b1fb8a70779ef79c7cf3861ce10449b63eacc2b59707f",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 3.257940800016513,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "b17c43be80a3f885e076a666d68a291ba76b1ce1fcf584458e47f5d19462ff84",
+                        "source": "langgraph/langgraph/errors.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.7341924905776978,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.3799595832824707,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "457c52db6ebc50c6c6cf83eb40d7ed08bfd0a5ba1880dffd48c342312a7cea20",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.1598557233810425,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "f552a7a71e53be7e9419059793e82beb94014bf6d1e638c4a2bbec6876b6058f",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.0662273168563843,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.6253402233123779,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.010078599996631965,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c533d07d9b00392931af6bf7b5b5b79dd0a284f26bc4f1e1e9b1f3a74ce42fef",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6f53d0374e3db1b303309e634ee9754a9f3864f3b8520a5ab729c405bdd69538",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "40e4af1424020abe148b1fb8a70779ef79c7cf3861ce10449b63eacc2b59707f",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5feddb7d1152ab3d009f7473fd32810fd270d11243c35ba3c4f1643bbbf6ae7e",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6da474bd497087f0576fcf81162db9a12cd32d524c1e86d3b4dbd22adadd9539",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "071de53ffba3d8630eb5f6af2b754df99ce4dcf5ffe8c5cd7ad6c4c7868cbdb7",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7c48952a85d91eb47c28495a00ea112e37ff98b8614d5c8dc614ae806da783b3",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 2.2142217000073288,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2befe131ce0064602af2ba118fef43a1cd8dcf8fb82d60851da863711b46024c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "db017121df9642d752b51dea9d07928212272e01cca5add25c9ede3c7ea0dcd4",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4e48f311c58a1d2323aeab32c2d5cfc361104a6f71ae4cbe494b301e3778fccf",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6f53d0374e3db1b303309e634ee9754a9f3864f3b8520a5ab729c405bdd69538",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "fe35cbc79a09d752780ed8653d25811ee3c03ddefab68895b6a1032dc12a982c",
+                        "source": "langgraph/langgraph/pregel/_io.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f552a7a71e53be7e9419059793e82beb94014bf6d1e638c4a2bbec6876b6058f",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 5.2300019888207316e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03278688524590164,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03200204813108039,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03076923076923077,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "6f53d0374e3db1b303309e634ee9754a9f3864f3b8520a5ab729c405bdd69538",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.030330882352941176,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "c533d07d9b00392931af6bf7b5b5b79dd0a284f26bc4f1e1e9b1f3a74ce42fef",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "2befe131ce0064602af2ba118fef43a1cd8dcf8fb82d60851da863711b46024c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "db017121df9642d752b51dea9d07928212272e01cca5add25c9ede3c7ea0dcd4",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 3.433862100006081,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.9963420629501343,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "c533d07d9b00392931af6bf7b5b5b79dd0a284f26bc4f1e1e9b1f3a74ce42fef",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.6216920018196106,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.22296775877475739,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "ae8521a8620b53b2cd077947f3ceb92de4c968b93d05f0cd578fa9775a2792ad",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.0821448564529419,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "8af96006cc8edd55d4b42e857322f437f0695952a732796dc3105efc08d5ca74",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.08733005821704865,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 3.194288900005631,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.79371976852417,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "2db9971c8f732f352a900378edbf32c94765942a01d9b4010e86ce648e2fc41c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.1884992122650146,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "b4f83da8c133d7e7cc8e206126302ede6a032498314a33c6c6c7d8d39098fd92",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.680220127105713,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "b17c43be80a3f885e076a666d68a291ba76b1ce1fcf584458e47f5d19462ff84",
+                        "source": "langgraph/langgraph/errors.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.5602068901062012,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "4b652e875ba10f45a0216b7bebe172b08c9a69712eb6871f6c19ff4c4bf36a6f",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.3302778005599976,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "93bb2bebf5b7f979691792a3dac08aeed463c7f649bf9fdd8fd4f29fd10f4bf3",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.183037281036377,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.0341564416885376,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "db017121df9642d752b51dea9d07928212272e01cca5add25c9ede3c7ea0dcd4",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.36439409852027893,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "dd68c5c7e64f341d3604ac7dbf3da5beb0363df335f06048f3c02249b5eafe30",
+                        "source": "checkpoint/langgraph/checkpoint/memory/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.3252570927143097,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "f552a7a71e53be7e9419059793e82beb94014bf6d1e638c4a2bbec6876b6058f",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.16884799301624298,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "2befe131ce0064602af2ba118fef43a1cd8dcf8fb82d60851da863711b46024c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.014309382997453213,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.06487440317869186,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "8af96006cc8edd55d4b42e857322f437f0695952a732796dc3105efc08d5ca74",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.21637247502803802,
+                        "rank": 13
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.0023037000210024416,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "40e4af1424020abe148b1fb8a70779ef79c7cf3861ce10449b63eacc2b59707f",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "963f55c9f14bb556ee9ebd745c7f4811a99f4218b848cf9876a9d6b4f8fc8413",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c185050b9eea9d81e5814bd5791d1d5551add9e7bbab1c7cc20827e5144c5226",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "fea369e5ab94ced83a47975d53a0098443d6b2690131c6860799ca9c4a6ee4ea",
+                        "source": "langgraph/langgraph/pregel/_executor.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ca860c6c5f97707d209b3556d07784019f7f0a99237372d099d022bbf8f1635b",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2793ed3e7ed92a944f2587389c2715d598795d5c663c1a015ba444970d8377e2",
+                        "source": "langgraph/langgraph/pregel/_executor.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c29b854475d745c6dfec41f4853b04ec8cb3935de3b570bd05e2a4d57a72197e",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2befe131ce0064602af2ba118fef43a1cd8dcf8fb82d60851da863711b46024c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "26fca7458f4377112418f5da3db490696cfdc82cc2e3b0dd2eb9cb9486a59459",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 0.8538108999782708,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "99f960538c6bd6e2b022edd387719609334791b290ae4c9fd20fae06f5f498e9",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5feddb7d1152ab3d009f7473fd32810fd270d11243c35ba3c4f1643bbbf6ae7e",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c185050b9eea9d81e5814bd5791d1d5551add9e7bbab1c7cc20827e5144c5226",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "36bcc38dfd72a78a0e74904596f23519d2f3ebf782f16b492c52713403ba3275",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "773eb354463d5d5e2dfc0f8f6590b59576a2b05241907b963f5027b4b221edef",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2ea9e964b7df2439f5cefd6375e1eade681c4b6122832f1f6b793b6af5381412",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ca860c6c5f97707d209b3556d07784019f7f0a99237372d099d022bbf8f1635b",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.710000939667225e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "c185050b9eea9d81e5814bd5791d1d5551add9e7bbab1c7cc20827e5144c5226",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03125763125763126,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.029910714285714284,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "ca860c6c5f97707d209b3556d07784019f7f0a99237372d099d022bbf8f1635b",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.02967032967032967,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "99f960538c6bd6e2b022edd387719609334791b290ae4c9fd20fae06f5f498e9",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "40e4af1424020abe148b1fb8a70779ef79c7cf3861ce10449b63eacc2b59707f",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "963f55c9f14bb556ee9ebd745c7f4811a99f4218b848cf9876a9d6b4f8fc8413",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "5feddb7d1152ab3d009f7473fd32810fd270d11243c35ba3c4f1643bbbf6ae7e",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 2.719530400005169,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.2802398204803467,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9040072560310364,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "faabbce290e912e131b642809c36f09081338018769f17f4c31633fd871edd16",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.8810913562774658,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "5feddb7d1152ab3d009f7473fd32810fd270d11243c35ba3c4f1643bbbf6ae7e",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.3644445538520813,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "40e4af1424020abe148b1fb8a70779ef79c7cf3861ce10449b63eacc2b59707f",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.2039289027452469,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.007670000020880252,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c533d07d9b00392931af6bf7b5b5b79dd0a284f26bc4f1e1e9b1f3a74ce42fef",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6f53d0374e3db1b303309e634ee9754a9f3864f3b8520a5ab729c405bdd69538",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7c48952a85d91eb47c28495a00ea112e37ff98b8614d5c8dc614ae806da783b3",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "767e289e80c9a2520b23f950489eaac30568d1643b89c7fb967feee1c0280bc6",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "99f960538c6bd6e2b022edd387719609334791b290ae4c9fd20fae06f5f498e9",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "038273059715a805402d1ad880d5cedd4959888529f8cb71e9d1cfedac438548",
+                        "source": "langgraph/langgraph/pregel/_checkpoint.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "283f443f95ca9702a615f5dc9d4cae14872e9fabf7e29b66c7f4b3d1ceace3f2",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 1.0344238999823574,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "c533d07d9b00392931af6bf7b5b5b79dd0a284f26bc4f1e1e9b1f3a74ce42fef",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2befe131ce0064602af2ba118fef43a1cd8dcf8fb82d60851da863711b46024c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6f53d0374e3db1b303309e634ee9754a9f3864f3b8520a5ab729c405bdd69538",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "fe35cbc79a09d752780ed8653d25811ee3c03ddefab68895b6a1032dc12a982c",
+                        "source": "langgraph/langgraph/pregel/_io.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3c0a85d6df76a94dff022613596f1f67ad7e0bbcffdf4865400461b5493ca63c",
+                        "source": "langgraph/langgraph/func/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4ed29099c30d08ce9b4261c90339425aa9be5b921553bf4f9796ad1d693027c7",
+                        "source": "langgraph/langgraph/func/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2e37fc921f0150660954d7b77cdf06972ac8d31539f5350f82c0e62c4f6bbb49",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 5.49999822396785e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "c533d07d9b00392931af6bf7b5b5b79dd0a284f26bc4f1e1e9b1f3a74ce42fef",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.032266458495966696,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.032018442622950824,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "6f53d0374e3db1b303309e634ee9754a9f3864f3b8520a5ab729c405bdd69538",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03149801587301587,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.030621785881252923,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "2befe131ce0064602af2ba118fef43a1cd8dcf8fb82d60851da863711b46024c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "fe35cbc79a09d752780ed8653d25811ee3c03ddefab68895b6a1032dc12a982c",
+                        "source": "langgraph/langgraph/pregel/_io.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "7c48952a85d91eb47c28495a00ea112e37ff98b8614d5c8dc614ae806da783b3",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "3c0a85d6df76a94dff022613596f1f67ad7e0bbcffdf4865400461b5493ca63c",
+                        "source": "langgraph/langgraph/func/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 2.2412586999998894,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "2befe131ce0064602af2ba118fef43a1cd8dcf8fb82d60851da863711b46024c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.7250066995620728,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "c533d07d9b00392931af6bf7b5b5b79dd0a284f26bc4f1e1e9b1f3a74ce42fef",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.2781704664230347,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "7c48952a85d91eb47c28495a00ea112e37ff98b8614d5c8dc614ae806da783b3",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.092839002609253,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "3c0a85d6df76a94dff022613596f1f67ad7e0bbcffdf4865400461b5493ca63c",
+                        "source": "langgraph/langgraph/func/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.5829546451568604,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "fe35cbc79a09d752780ed8653d25811ee3c03ddefab68895b6a1032dc12a982c",
+                        "source": "langgraph/langgraph/pregel/_io.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.37793660163879395,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.003975500003434718,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "743764146974dadb194b6f579a8ed72288951a599c82ee1d18ca420968d671c9",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6693efc12260ee842c18e0cac972e680fc6713d73099b31b0bffab84e44440b9",
+                        "source": "langgraph/langgraph/_internal/_config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5c74d0f23d8dd1ebef6a94184fed14034f10159a1e96ce9533031ae3d874f8dc",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0636cdd51ee4a15c9da65a89668247aab555cb9761622ec4f73ee8dc34fcddc2",
+                        "source": "checkpoint/langgraph/store/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ff8fe23c0eb398620b9b5b47d236a88c2feba56915b7ddbe8a5409bf287d9582",
+                        "source": "checkpoint-postgres/langgraph/store/postgres/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c533d07d9b00392931af6bf7b5b5b79dd0a284f26bc4f1e1e9b1f3a74ce42fef",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5d5fbe6abea93f661ebcafe9f8699caa1a354479c9738815488f5b2ad61ef948",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 1.344659700000193,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "0de7486956738b1e400aa6da78e63c124c6c17f185aa59cd2a5ee7aa344e0441",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f552a7a71e53be7e9419059793e82beb94014bf6d1e638c4a2bbec6876b6058f",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b51bdd007deb9ea03d0c26edb76108c08e1887adfb79062ccf00e19fcade96a1",
+                        "source": "checkpoint-postgres/langgraph/store/postgres/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "db017121df9642d752b51dea9d07928212272e01cca5add25c9ede3c7ea0dcd4",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6693efc12260ee842c18e0cac972e680fc6713d73099b31b0bffab84e44440b9",
+                        "source": "langgraph/langgraph/_internal/_config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "53d8ac1bb2eb77578e5242cbee80eab0f3eb4b34f57ee0751cd3f3e261aea94b",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 7.760000880807638e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.0315136476426799,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "6693efc12260ee842c18e0cac972e680fc6713d73099b31b0bffab84e44440b9",
+                        "source": "langgraph/langgraph/_internal/_config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.030834914611005692,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "be4e3d8da4a71555f2e05cbbfde1771cfdcae1f999b298730ac571e761a70d54",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.030309988518943745,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "20b5b337f6353f7953232c67c575d73a18fba94653004e1430aa00acfc5814b0",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.02919863597612958,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "0de7486956738b1e400aa6da78e63c124c6c17f185aa59cd2a5ee7aa344e0441",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "743764146974dadb194b6f579a8ed72288951a599c82ee1d18ca420968d671c9",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "f552a7a71e53be7e9419059793e82beb94014bf6d1e638c4a2bbec6876b6058f",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "5c74d0f23d8dd1ebef6a94184fed14034f10159a1e96ce9533031ae3d874f8dc",
+                        "source": "langgraph/langgraph/pregel/_algo.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 2.7566660000011325,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "93cbc68af36edcc73923fb56423b92e6757698c85f81cc8e51484710269c0995",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.120827555656433,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "0de7486956738b1e400aa6da78e63c124c6c17f185aa59cd2a5ee7aa344e0441",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.5146651864051819,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "743764146974dadb194b6f579a8ed72288951a599c82ee1d18ca420968d671c9",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.48453447222709656,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "457c52db6ebc50c6c6cf83eb40d7ed08bfd0a5ba1880dffd48c342312a7cea20",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.3314964473247528,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "f552a7a71e53be7e9419059793e82beb94014bf6d1e638c4a2bbec6876b6058f",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.11501404643058777,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 4.343254699982936,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.79371976852417,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "7c48952a85d91eb47c28495a00ea112e37ff98b8614d5c8dc614ae806da783b3",
+                        "source": "langgraph/langgraph/pregel/_retry.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.2364861965179443,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "2db9971c8f732f352a900378edbf32c94765942a01d9b4010e86ce648e2fc41c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.1884992122650146,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "40e4af1424020abe148b1fb8a70779ef79c7cf3861ce10449b63eacc2b59707f",
+                        "source": "langgraph/langgraph/pregel/_runner.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.1438839435577393,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "b4f83da8c133d7e7cc8e206126302ede6a032498314a33c6c6c7d8d39098fd92",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.680220127105713,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "b17c43be80a3f885e076a666d68a291ba76b1ce1fcf584458e47f5d19462ff84",
+                        "source": "langgraph/langgraph/errors.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.5602068901062012,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "4b652e875ba10f45a0216b7bebe172b08c9a69712eb6871f6c19ff4c4bf36a6f",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.3302778005599976,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "93bb2bebf5b7f979691792a3dac08aeed463c7f649bf9fdd8fd4f29fd10f4bf3",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.183037281036377,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "3c0a85d6df76a94dff022613596f1f67ad7e0bbcffdf4865400461b5493ca63c",
+                        "source": "langgraph/langgraph/func/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.1684441566467285,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "903e7284504b59a5a2dbb0623fa273d340f7ca498a52a7e1f93c937c126e212a",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.0341564416885376,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "fe35cbc79a09d752780ed8653d25811ee3c03ddefab68895b6a1032dc12a982c",
+                        "source": "langgraph/langgraph/pregel/_io.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.5760286450386047,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "db017121df9642d752b51dea9d07928212272e01cca5add25c9ede3c7ea0dcd4",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.36439409852027893,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "0de7486956738b1e400aa6da78e63c124c6c17f185aa59cd2a5ee7aa344e0441",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.36326226592063904,
+                        "rank": 13
+                    }
+                ]
+            }
+        ],
+        "generation_metrics": [
+            {
+                "name": "Initial Generation",
+                "answer": "## Retrieved facts\n\n- `ToolNode._func` creates one `ToolRuntime` per tool call, preserving each call's configuration and tool-call ID. It then executes the calls through `executor.map(self._run_one, ...)`, so the three tool calls are submitted as parallel executions when the executor supports parallelism.\n- Each asynchronous tool execution receives a `ToolCallRequest` containing the original tool call, the tool runtime, and the runtime state. If a wrapper is configured, `_arun_one` invokes the wrapper; otherwise it calls `_execute_tool_async` directly. Exceptions from a wrapper are converted to a `ToolMessage` only when tool-error handling is enabled; otherwise they are re-raised.\n- `_combine_tool_outputs` only combines returned `ToolMessage` and `Command` values. It flattens list outputs, preserves non-command outputs, and merges certain parent `Command` values containing `Send` objects. The retrieved implementation does not show interrupt-exception collection in this method.\n- `_should_stop_others` treats an exception as a reason to stop other tasks unless the exception is a `GraphBubbleUp`, has already been handled, or is in the skip-reraise set. Its docstring explicitly says that graph interrupts are not considered failures. Thus, based on this function alone, an interrupt should not cause the other parallel tasks to be treated as ordinary failures.\n- `Interrupt.__init__` stores the interrupt payload in `value` and assigns an explicit `id`, defaulting to `_DEFAULT_INTERRUPT_ID`. For the deprecated `ns` argument, when no explicit ID is supplied and `ns` is a sequence, the ID is derived by hashing the namespace components joined with `|`.\n- `Interrupt.interrupt_id` is deprecated and returns `self.id` after emitting a deprecation warning. The current identifier exposed by this class is therefore `Interrupt.id`.\n- `PregelLoop._resume_error_handlers_if_applicable` shows that pending writes can contain task-associated markers: it scans `(task_id, channel, value)` entries, groups `ERROR_SOURCE_NODE` and `ERROR` entries by `task_id`, and then prepares a handler task for the same failed task. This demonstrates task IDs are used to associate persisted task events, but this method concerns errors rather than interrupts.\n- In `Pregel.perform_superstep`, update tasks are created with an `INTERRUPT` entry in their initial `writes` list. Pending writes are read from the checkpoint and writes with channels such as `ERROR` and `INTERRUPT` are explicitly treated specially in some paths. The shown code does not include the code that converts raised interrupt exceptions into the task/checkpoint interrupt collection exposed by graph state.\n\n## What the retrieved context does not establish\n\nThe supplied context does not contain the implementation of `interrupt()`, `GraphInterrupt`, the parallel runner's interrupt aggregation, task construction for pending interrupts, or resume-command processing. Consequently, it cannot establish the complete execution trace requested:\n\n1. It does not show how interrupt exceptions raised by the three parallel tool tasks are caught and collected.\n2. It does not show how each interrupt is written into a task's pending-interrupt state or serialized into the checkpoint.\n3. It does not show how a namespace is constructed for a particular task, or whether the namespace includes the task ID, tool-call ID, node name, or another value.\n4. It does not show how a `Command(resume={interrupt_id: response})` map is looked up during resumption, nor how the lookup selects the original task.\n\nTherefore, the observed loss of interrupts and the possible delivery of a response to the wrong tool cannot be attributed to a specific bug from the supplied context. The available code shows that parallel execution and interrupt-aware runner behavior exist, but not the code that performs the interrupt-to-task and resume-to-interrupt associations. Any more specific explanation would be unsupported.",
+                "answer_length": 3958,
+                "prompt_tokens": 9048,
+                "completion_tokens": 1324,
+                "total_tokens": 10372,
+                "estimated_cost": 0.0033984,
+                "generation_latency": 15.05003400001442,
+                "is_complete": false,
+                "round_number": null,
+                "gaps_detected": [
+                    "Parallel interrupt collection and GraphInterrupt handling in the Pregel runner",
+                    "interrupt() implementation, interrupt namespaces, and pending interrupt task state",
+                    "Resume-map matching during Command(resume=...) and checkpoint restoration"
+                ]
+            },
+            {
+                "name": "Gap Generation Round 1",
+                "answer": "## Retrieved facts\n\n1. **Each tool invocation calls `interrupt()` independently.**\n   `interrupt()` obtains the current task's configurable scratchpad and checkpoint namespace:\n\n   ```python\n   conf = get_config()[\"configurable\"]\n   scratchpad = conf[CONFIG_KEY_SCRATCHPAD]\n   idx = scratchpad.interrupt_counter()\n   ```\n\n   If no resume value is available for that task and interrupt position, it raises `GraphInterrupt` containing one `Interrupt` object:\n\n   ```python\n   raise GraphInterrupt(\n       (\n           Interrupt.from_ns(\n               value=value,\n               ns=conf[CONFIG_KEY_CHECKPOINT_NS],\n           ),\n       )\n   )\n   ```\n\n   Therefore, the exception is raised inside the individual tool task; the `interrupt()` implementation does not itself collect interrupts from sibling tasks.\n\n2. **Interrupt IDs are derived from the task's namespace.**\n   `Interrupt.__init__` stores the supplied value and assigns an ID. When the deprecated `ns` argument is used and no explicit ID is supplied, it hashes the namespace sequence:\n\n   ```python\n   self.id = xxh3_128_hexdigest(\"|\".join(ns).encode())\n   ```\n\n   The `interrupt()` implementation calls `Interrupt.from_ns(..., ns=conf[CONFIG_KEY_CHECKPOINT_NS])`. Thus, based on the retrieved code, the namespace is the identity input used to associate an interrupt with its execution context. The exact implementation of `Interrupt.from_ns` is not included, so the precise namespace components cannot be stated beyond this.\n\n3. **Resume values are matched by task-local interrupt order.**\n   On a later invocation, `interrupt()` first checks the current task's scratchpad resume list:\n\n   ```python\n   if scratchpad.resume:\n       if idx < len(scratchpad.resume):\n           conf[CONFIG_KEY_SEND]([(RESUME, scratchpad.resume)])\n           return scratchpad.resume[idx]\n   ```\n\n   If a new resume value is available, it is appended to that same task-local list and returned:\n\n   ```python\n   v = scratchpad.get_null_resume(True)\n   if v is not None:\n       assert len(scratchpad.resume) == idx\n       scratchpad.resume.append(v)\n       conf[CONFIG_KEY_SEND]([(RESUME, scratchpad.resume)])\n       return v\n   ```\n\n   The function's documentation explicitly says that multiple interrupts in one node are matched by their order, and that the resume list is scoped to the specific task and is not shared across tasks.\n\n   Consequently, the shown implementation does **not** perform a global lookup of `interrupt_id -> originating tool`. It consumes the resume value already made available to the current task, using that task's interrupt index.\n\n4. **A checkpointer is required.**\n   The `interrupt()` documentation states that a checkpointer must be enabled because interrupt handling relies on persisting graph state. `PregelLoop._suppress_interrupt` also persists checkpoint data and pending writes before suppressing a top-level `GraphInterrupt`:\n\n   ```python\n   self._put_exit_delta_writes()\n   self._put_checkpoint(self.checkpoint_metadata)\n   self._put_pending_writes()\n   ```\n\n   For a top-level graph, this method recognizes `GraphInterrupt`, emits an interrupt lifecycle event, optionally emits pending values, emits an `INTERRUPT` update when needed, and saves the final output before returning `True` to suppress the exception.\n\n5. **`ToolNode._arun_one` executes one tool call, but the retrieved code does not show its interrupt aggregation path.**\n   `_arun_one` constructs a `ToolCallRequest` containing the tool call, state, and runtime, then either executes the tool directly or invokes a configured wrapper. Its exception handler only handles exceptions raised by the wrapper when `_handle_tool_errors` is enabled; the retrieved code does not show how `GraphInterrupt` exceptions from multiple parallel `_arun_one` tasks are collected, represented in `tasks`, or written to the checkpoint.\n\n   `_combine_tool_outputs` combines ordinary tool outputs and `Command` outputs. It does not contain logic for collecting `GraphInterrupt` objects. Therefore, it cannot by itself explain how three parallel interrupting tools become the pending-interrupt collection exposed by graph state.\n\n## What this implies for the observed behavior\n\nThe retrieved implementation establishes that interrupt identity and resume consumption are task-scoped. It does **not** establish that an interrupt map keyed by ID is routed back to the correct parallel task. In particular, the available `interrupt()` code matches values using the current task's scratchpad and positional index, not by searching all task IDs or interrupt IDs.\n\nThus, the expected behavior requires the parallel task scheduler/checkpoint-resume machinery to preserve, for every task:\n\n- the `GraphInterrupt` raised by that task;\n- the resulting `Interrupt` object and namespace-derived ID;\n- the task's pending resume list; and\n- the mapping from the application's resume map to that task's scratchpad.\n\nThose responsibilities are outside the retrieved portions of `ToolNode._arun_one`, `_combine_tool_outputs`, and `interrupt()`.\n\n**Important limitation:** The retrieved context does not include the code that runs the three tools in parallel, catches and aggregates their `GraphInterrupt` exceptions, serializes pending interrupts into `graph.get_state(config).tasks`, or translates `Command(resume={interrupt_id: response})` into per-task scratchpad resume values. Therefore, it cannot determine whether the reported loss or cross-tool association is caused by exception collection, checkpoint serialization, namespace generation, resume-map routing, or application-side construction of the map.\n\nThe code shown does indicate one concrete constraint: a resume value must ultimately be delivered to the scratchpad of the task that raised the interrupt. If values are instead merged into one shared positional list or assigned according to completion order, that would be inconsistent with the documented task-local scoping and could produce the reported cross-tool association. This is an inference about a possible failure mode, not a demonstrated description of the framework's implementation.\n\nAlso, the supplied example does not show `compile(checkpointer=...)` or a configured `thread_id`; the documentation says a checkpointer is required, but the retrieved context does not establish whether those configuration details are present in the actual application.",
+                "answer_length": 6391,
+                "prompt_tokens": 6891,
+                "completion_tokens": 1908,
+                "total_tokens": 8799,
+                "estimated_cost": 0.0036678,
+                "generation_latency": 17.742376600013813,
+                "is_complete": false,
+                "round_number": 1,
+                "gaps_detected": [
+                    "Pregel parallel task interrupt collection and pending-interrupt checkpoint representation",
+                    "Resume-map routing from interrupt IDs to task scratchpads",
+                    "Interrupt.from_ns namespace construction"
+                ]
+            },
+            {
+                "name": "Gap Generation Round 2",
+                "answer": "## Retrieved facts\n\n1. **Each tool invocation raises its own `GraphInterrupt`.**\n   `interrupt(value)` obtains the current task's scratchpad and increments that task's interrupt counter. If no resume value is available for the current interrupt index, it raises:\n\n   ```python\n   GraphInterrupt((Interrupt.from_ns(value=value, ns=checkpoint_ns),))\n   ```\n\n   The `Interrupt` ID is derived from the task's checkpoint namespace by `Interrupt.from_ns()`:\n\n   ```python\n   id = xxh3_128_hexdigest(ns.encode())\n   ```\n\n   Therefore, the namespace used for the interrupt is the identity source for its ID. The `interrupt_id` property is only a deprecated alias for `id`.\n\n2. **Interrupt ordering is local to a task.**\n   The `interrupt()` docstring states that, when a node contains multiple interrupts, resume values are matched by their order in that node. The resume list is scoped to the specific task executing the node and is not shared across tasks. Consequently, the interrupt counter and resume-index lookup are task-local; they are not one global counter shared by the three parallel tools.\n\n3. **The interrupt is propagated out of task execution rather than retried.**\n   `run_with_retry()` invokes the task and has a special `except GraphBubbleUp` path that re-raises the exception. The shown retry handler only retries ordinary exceptions selected by a retry policy; it does not retry a `GraphInterrupt` through the ordinary exception path.\n\n4. **The parallel runner collects interrupts from completed tasks.**\n   `_panic_or_proceed()` examines completed futures. For an exception that is a `GraphInterrupt`, it appends the exception to a local `interrupts` list instead of immediately re-raising it. After examining the completed futures, it raises one combined `GraphInterrupt` containing the flattened interrupt payloads from the collected exceptions:\n\n   ```python\n   raise GraphInterrupt(tuple(i for exc in interrupts for i in exc.args[0]))\n   ```\n\n   If any non-interrupt exception is encountered while `panic=True`, pending futures are cancelled and that exception is re-raised. Thus, the code shown has a single aggregation point for interrupts, but it does not show an ordering guarantee for iterating the `done` set. Since `done` is a set, the order in which parallel task exceptions are collected is not established by this code.\n\n5. **The loop suppresses the combined interrupt at the top-level graph.**\n   `PregelLoop._suppress_interrupt()` recognizes a top-level `GraphInterrupt`, extracts all `Interrupt` objects from `exc_value.args[0]`, emits an `interrupt` lifecycle event, applies pending writes where applicable, and saves the final output. It returns `True`, suppressing propagation of the exception to the caller as an ordinary error.\n\n6. **Checkpointing is required.**\n   The `interrupt()` documentation explicitly says that a checkpointer must be enabled because interrupt handling relies on persisting graph state. The example compiles the graph with `InMemorySaver` and resumes using a `Command` carrying a resume value.\n\n7. **A resume command becomes a `RESUME` pending write.**\n   `map_command()` maps `cmd.resume` to:\n\n   ```python\n   (NULL_TASK_ID, RESUME, cmd.resume)\n   ```\n\n   It does not itself show how a dictionary keyed by interrupt ID is converted into per-task resume lists. The actual lookup shown in `interrupt()` is by the current task's interrupt index:\n\n   ```python\n   if idx < len(scratchpad.resume):\n       return scratchpad.resume[idx]\n   ```\n\n   The function also appends a newly available resume value to that task's resume list and sends the updated list through the configured send mechanism.\n\n## Trace for the three parallel tools\n\n- ToolNode's `_arun_one()` constructs a `ToolCallRequest` for each call and executes the tool through `_execute_tool_async()` when no wrapper is configured, or through the configured wrapper otherwise. The provided code does not include the implementation that schedules the three `_arun_one()` calls, but the question establishes that they execute in parallel.\n- `create_circle()`, `create_square()`, and `create_triangle()` each reach `interrupt()`. Each invocation consults its own task scratchpad. With no resume value available at index zero, each raises a `GraphInterrupt` containing an `Interrupt` whose ID is derived from that task's checkpoint namespace.\n- The parallel runner observes the three failed futures. `_panic_or_proceed()` collects their `GraphInterrupt` objects and raises one combined `GraphInterrupt` containing the collected `Interrupt` objects.\n- At the loop boundary, `_suppress_interrupt()` extracts that combined sequence and persists/emits the interrupt information as part of the interrupted graph state.\n\n## What the shown code does and does not establish about the symptom\n\nThe code establishes that interrupt identity is task-based through the checkpoint namespace, while resume lookup inside `interrupt()` is positional within the current task. It also establishes that parallel interrupts are first aggregated into a flat sequence.\n\nThe shown `_panic_or_proceed()` implementation does **not** preserve an explicit task-to-interrupt mapping while aggregating: it iterates a `set` of completed futures and appends only the interrupt payloads. Therefore, the retrieved context does not establish a deterministic ordering of the combined interrupt sequence relative to the originating tools.\n\nHowever, that alone does not prove that a correct interrupt-ID-to-task resume map will be misrouted. The missing checkpoint/task-state code would need to show how the persisted interrupt records are associated with tasks and how a dictionary such as `{interrupt_id: response}` is transformed into the scratchpad resume list for the appropriate task. In the code shown, `interrupt()` ultimately consumes a task-local list by index; it does not perform an ID lookup itself.\n\nThus, if the resume map is correctly routed to each originating task before `interrupt()` runs again, the task-local ordering can preserve the association. If the map is instead flattened or assigned according to the nondeterministic aggregate order, a response can be delivered to the wrong tool—but that routing failure is an inference from the shown mechanisms, not a behavior directly demonstrated by the retrieved code.\n\n## Conclusion\n\nThe central separation is:\n\n- **Interrupt ID/namespace:** associated with the task through `CONFIG_KEY_CHECKPOINT_NS` and `Interrupt.from_ns()`.\n- **Resume matching inside a task:** positional, using that task's scratchpad interrupt counter and resume list.\n- **Parallel aggregation:** a flat combined `GraphInterrupt` assembled by iterating completed futures stored in a set.\n- **Checkpoint persistence and external resume-map routing:** required to explain exactly why interrupts are missing or why a response is assigned to another tool, but those implementations are not included in the retrieved context.\n\nThe expected invariant—every pending interrupt remains tied to its originating task—cannot be verified from the supplied excerpts because the task checkpoint serialization and ID-keyed resume routing are absent.",
+                "answer_length": 7152,
+                "prompt_tokens": 6944,
+                "completion_tokens": 1965,
+                "total_tokens": 8909,
+                "estimated_cost": 0.0037468,
+                "generation_latency": 18.535722700005863,
+                "is_complete": false,
+                "round_number": 2,
+                "gaps_detected": [
+                    "Pregel task checkpoint state and pending-interrupt persistence",
+                    "Interrupt-ID keyed resume routing to task scratchpads",
+                    "ToolNode parallel scheduling and task identity for multiple tool calls"
+                ]
+            }
+        ],
+        "judge_evaluation": {
+            "correctness": {
+                "score": 5.0,
+                "justification": "The answer accurately traces the interrupt collection, ID association, and resume matching based on the provided context. It correctly identifies what is established and what is not, particularly regarding the non-deterministic aggregation order and the missing checkpoint/resume routing logic."
+            },
+            "groundedness": {
+                "score": 5.0,
+                "justification": "All significant technical claims are directly supported by the retrieved context. The answer carefully distinguishes between direct evidence, logical inferences, and limitations of the provided context."
+            },
+            "completeness": {
+                "score": 5.0,
+                "justification": "The answer thoroughly addresses all aspects of the user's question, including how interrupts are collected, stored, associated with tasks, and how resume values are matched. It covers all expected concepts and explains the implications of the observed mechanisms."
+            },
+            "hallucination": {
+                "score": 0.0,
+                "justification": "The answer contains no unsupported or fabricated technical claims. It explicitly states when information is not available in the retrieved context."
+            },
+            "missing_concepts": [],
+            "unsupported_claims": []
+        },
+        "overall_metrics": {
+            "total_latency": 82.60465650001424,
+            "total_cost": 0.0201167,
+            "recall_at_k": 0.7142857142857143,
+            "precision_at_k": 0.38461538461538464,
+            "hit_rate": 1.0,
+            "mrr": 1.0
+        }
+    }
+]

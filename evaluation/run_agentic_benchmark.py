@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 from pathlib import Path
+import torch
 
 from pipeline.initialization import initialize_resources
 from pipeline.prepare_retrieval_resources import prepare_retrieval_resources
@@ -24,6 +25,7 @@ from retrieval.multi_corpus_retriever import MultiCorpusRetriever
 from retrieval.multi_query_retrieval_strategy import MultiQueryRetrievalStrategy
 
 from reranking.onnx_reranker import ONNXReranker
+from reranking.cross_encoder import CrossEncoderReranker
 
 from router.query_router import QueryRouter
 
@@ -72,6 +74,12 @@ def main() -> None:
 
     load_dotenv()
 
+    torch.set_num_threads(4)
+    torch.set_num_interop_threads(1)
+
+    print("PyTorch threads:", torch.get_num_threads())
+    print("PyTorch interop threads:", torch.get_num_interop_threads())
+
     print("=" * 60)
     print("Agentic Developer Documentation Assistant Evaluation")
     print("=" * 60)
@@ -83,6 +91,12 @@ def main() -> None:
         print("\nInitializing embedding model...")
         embedding_model = get_embedding_model()
         print("Embedding model ready\n")
+        print(
+            "[AFTER EMBEDDING] torch threads=",
+            torch.get_num_threads(),
+            "interop=",
+            torch.get_num_interop_threads(),
+        )
 
         # ---------------------------------------------------------
         # Documentation corpus
@@ -202,12 +216,19 @@ def main() -> None:
         #     top_k=RERANK_TOP_K,
         # )
 
-        reranker = ONNXReranker(
-            model_path="reranking/onnx/bge-reranker-base",
+        reranker = CrossEncoderReranker(
+            rerank_model="cross-encoder/ettin-reranker-32m-v1",
             top_k=RERANK_TOP_K,
             batch_size=16,
-            intra_op_num_threads=8,
         )
+
+
+        # reranker = ONNXReranker(
+        #     model_path="reranking/onnx/bge-reranker-base-o3",
+        #     top_k=RERANK_TOP_K,
+        #     batch_size=16,
+        #     intra_op_num_threads=4,
+        # )
 
         print("Retrieval resources ready\n")
 
@@ -241,7 +262,7 @@ def main() -> None:
         judge_llm = get_llm(
             model_name=JUDGE_MODEL_NAME,
             model_provider=JUDGE_MODEL_PROVIDER,
-            max_tokens=5000,
+            max_tokens=8000,
             temperature=JUDGE_TEMP,
         )
 

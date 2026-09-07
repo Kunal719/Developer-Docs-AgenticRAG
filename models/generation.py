@@ -1,4 +1,6 @@
 from pydantic import BaseModel
+from typing import Literal
+
 from models.retrieval_plan import MetadataFilters
 
 class RetrievalGap(BaseModel):
@@ -13,6 +15,8 @@ class RetrievalGap(BaseModel):
     missing_topic: str
     suggested_query: str
     suggested_filters: MetadataFilters | None = None
+    priority: Literal["critical", "important", "optional"]
+    reason: str
 
 class GeneratedAnswer(BaseModel):
     """

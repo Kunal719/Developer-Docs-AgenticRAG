@@ -1,0 +1,1258 @@
+[
+    {
+        "question": {
+            "question": "A LangGraph agent uses a ToolNode where a tool returns Command(update=...) to modify graph state instead of returning a normal tool result. The application consumes the graph using stream_mode=\"messages\" and expects to receive the corresponding ToolMessage so that the frontend can render the completed tool call. The state is actually updated correctly, but the ToolMessage is missing from the messages stream. Review ToolNode's command handling and the graph streaming implementation and explain the distinction between state updates produced by a Command and message-stream events, how ToolNode represents command-based tool results, why a state update can succeed without producing the expected messages-stream event, and which stream information the application must consume when it needs both token/message events and state updates.",
+            "code_snippet": "from typing import TypedDict\nfrom langchain_core.tools import tool\nfrom langgraph.prebuilt import ToolNode\nfrom langgraph.types import Command\nfrom langgraph.graph import StateGraph, START, END\n\nclass State(TypedDict):\n    messages: list\n    user_name: str\n\n@tool\ndef lookup_user() -> Command:\n    return Command(\n        update={\"user_name\": \"Alice\"}\n    )\n\ntool_node = ToolNode([lookup_user])\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"tools\", tool_node)\nbuilder.add_edge(START, \"tools\")\nbuilder.add_edge(\"tools\", END)\ngraph = builder.compile()\n\nfor chunk in graph.stream(\n    {\"messages\": [ai_message_with_tool_call]},\n    stream_mode=\"messages\"\n):\n    print(chunk)",
+            "error": null,
+            "logs": null,
+            "observed_behavior": "The tool's state update is applied, but the application does not observe the expected ToolMessage through the messages stream.",
+            "expected_behavior": "The application should understand which stream mode exposes the state update and tool result and combine stream modes when it needs both message-level events and graph-state updates.",
+            "id": 19,
+            "category": "debugging",
+            "intent": "tool_command_state_streaming",
+            "difficulty": "very_hard",
+            "expected_files": [
+                "event-streaming.mdx",
+                "graph-api.mdx",
+                "langgraph/langgraph/types.py",
+                "langgraph/langgraph/graph/state.py",
+                "prebuilt/langgraph/prebuilt/tool_node.py",
+                "prebuilt/langgraph/prebuilt/_tool_call_transformer.py"
+            ],
+            "concepts": [
+                "ToolNode",
+                "Command",
+                "tool state updates",
+                "ToolMessage",
+                "messages streaming",
+                "updates streaming",
+                "stream modes"
+            ],
+            "tags": [
+                "tool_node",
+                "command_update",
+                "messages_stream",
+                "updates_stream",
+                "tool_message",
+                "streaming"
+            ],
+            "evidence": null,
+            "queries": [
+                "How does ToolNode handle tools that return Command objects?",
+                "How are Command-based tool state updates represented by ToolNode?",
+                "Why can a ToolMessage be absent from LangGraph messages streaming when a tool returns Command?",
+                "What is the difference between messages streaming and updates streaming in LangGraph?",
+                "How does ToolNode convert tool results into graph state updates?",
+                "How should an application stream both tool messages and Command state updates?"
+            ]
+        },
+        "final_answer": "## Retrieved facts\n\n`stream_mode=\"messages\"` is a message-token stream, not a general graph-state stream. The `Pregel.stream` implementation documents this mode as emitting LLM messages token-by-token together with invocation metadata. By contrast:\n\n- `stream_mode=\"updates\"` emits node/task names and the updates returned after each step.\n- `stream_mode=\"values\"` emits the complete state after each step.\n- Multiple modes can be requested by passing a sequence of modes; the output is then emitted as `(mode, data)` tuples.\n\nA `Command` returned by a tool is handled by `ToolNode._normalize_tool_response`. The command is validated and returned as a `Command`; `ToolNode` does not automatically create a `ToolMessage` merely because the command updates graph state. A command can contain:\n\n- a dictionary update, such as `Command(update={\"user_name\": \"Alice\"})`, when `ToolNode` receives dictionary-style state input;\n- a list of messages in `Command.update` when it receives list-style message input; or\n- another command form that is passed through without message normalization.\n\nFor a command sent to the current graph, `_validate_tool_command` requires a matching `ToolMessage` in the update, unless the command targets another graph or removes all messages. The documentation also explicitly warns that a tool returning `Command` must include the message-history state key and that the update must contain a `ToolMessage`.\n\nTherefore, the shown return value:\n\n```python\nCommand(update={\"user_name\": \"Alice\"})\n```\n\ndoes update `user_name` conceptually, but it does not represent a completed tool result in the `messages` state. According to the retrieved implementation, for a current-graph `ToolNode` command it should normally fail validation because no matching `ToolMessage` is present. If the command is accepted through a different execution path or configuration, the state update can still be applied without creating a message-stream event: state-channel updates and `messages`-stream events are separate mechanisms.\n\nThe relevant distinction is:\n\n1. `Command.update` changes graph state. A command that updates `user_name` can therefore affect the resulting state.\n2. `stream_mode=\"messages\"` reports message events, specifically LLM message/token events. It does not report every state update and does not synthesize a `ToolMessage` from arbitrary command fields.\n3. A `ToolMessage` must be explicitly included in the command's `messages` update when the tool result is intended to become part of the message history. The implementation accepts it either directly in a list-style update or under the configured messages key for dictionary-style input, and validates that its `tool_call_id` matches the originating tool call.\n\nThe application should consume the state-oriented stream as well as the message stream. For example:\n\n```python\nfor mode, data in graph.stream(\n    {\"messages\": [ai_message_with_tool_call]},\n    stream_mode=[\"messages\", \"updates\"],\n):\n    if mode == \"messages\":\n        # LLM/message token events\n        handle_message_event(data)\n    elif mode == \"updates\":\n        # Node updates, including the ToolNode/Command state update\n        handle_state_update(data)\n```\n\nUse `\"values\"` instead of or in addition to `\"updates\"` when the frontend needs the complete state after each step. If the frontend specifically needs a completed tool call in message history, the tool should return a `Command` whose update includes both the application-state change and a matching `ToolMessage` under `messages`, as required by the documentation and `ToolNode` validation. The retrieved context does not specify the exact `ToolMessage` constructor/import syntax for this particular version, so that construction should follow the version's message API rather than being inferred here.\n\n## Conclusion\n\nThe missing event is explained by confusing graph-state updates with message-stream events. `messages` does not expose arbitrary `Command.update` fields. Consume `updates` or `values` for state changes, and combine that mode with `messages` when the application needs both LLM/message events and graph-state updates. Also, a current-graph command-based tool result must include a matching `ToolMessage`; the example command omits it and is contrary to the documented `ToolNode` contract.",
+        "experiment_metadata": {
+            "version": "v7",
+            "timestamp": "2026-08-31T02:31:14.388482",
+            "embedding_model": "text-embedding-3-small",
+            "llm_provider": "openai",
+            "llm": "gpt-5.6-luna",
+            "chunk_size": 1200,
+            "chunk_overlap": 200,
+            "dense_top_k": 10,
+            "bm25_top_k": 10,
+            "hybrid_top_k": 16,
+            "rrf_k": 60,
+            "reranker_top_k": 13,
+            "reranker_name": "cross-encoder/ettin-reranker-32m-v1",
+            "judge_model": "gemini-2.5-flash",
+            "judge_llm_provider": "google_genai",
+            "router_llm": "gpt-5.6-luna",
+            "router_llm_provider": "openai"
+        },
+        "router_metrics": {
+            "name": "Query Router",
+            "prompt_tokens": 1904,
+            "completion_tokens": 230,
+            "total_tokens": 2134,
+            "estimated_cost": 0.0006568,
+            "router_latency": 4.291581800003769
+        },
+        "retrieval_plan": {
+            "retrieval_mode": "combined_query",
+            "reasoning": "This is a focused but multi-aspect implementation question spanning ToolNode command-result handling and graph streaming semantics. The related topics should be retrieved together so their interaction is preserved, while exact metadata lookups target the named ToolNode and Command symbols.",
+            "sub_queries": [
+                "how does ToolNode represent a tool that returns Command(update) instead of a normal tool result",
+                "how does graph streaming distinguish state updates from messages stream events",
+                "why can a Command update graph state without emitting the expected ToolMessage in stream_mode messages",
+                "which combined stream modes expose message events together with state updates and tool results"
+            ],
+            "combined_query": "LangGraph ToolNode Command(update) tool result missing ToolMessage in stream_mode messages; how ToolNode represents command-based tool results, how graph streaming distinguishes state updates from messages events, why a state update can succeed without the expected ToolMessage, and which combined stream modes expose both token/message events and graph-state updates",
+            "metadata_filters": {
+                "corpus": null,
+                "module_names": null,
+                "class_names": [
+                    "ToolNode"
+                ],
+                "function_names": null,
+                "category": null
+            }
+        },
+        "pipeline_stages": [
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.28246629997738637,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "3b8a6def758a3a19e1b1c266323e05dafd01081bb7ad4f9ccd29e68a2ac552a4",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3cb5bdb639288a2b52da09387ca01f995096dbf8a38269bbbc900636ed942980",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d60a824d510f99c48a977fc1422cf50fa38047ff74249f86209fb4961d10bfe9",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5e290460a8a5b32c99fdef534f6bc3f7031b75b520b77ee5625da7061fe1141b",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4e297e8845eb7810bda3f72017a327e2bb57362040fdfa8eae1496d018b97b96",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6eae54191c097e8f68f9266b4d1fa313c7c09b8ef100f9b3adaba271eace7b33",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ee01a077f6af1693dc2fda971f2b682962a2ef68774586b853e46a608eccb228",
+                        "source": "fault-tolerance.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7681e7648ea07f5b334c417b148aa3220dd4e14d345ba930caf2a60322654c05",
+                        "source": "fault-tolerance.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8638fa2654eb77b960500778af1043aa243ac105e5b04fc16c9c8ca6f80da09d",
+                        "source": "test.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "764561b77139d52b2d3656fa227009e0ea869f127f2648c54a5588528b93d17b",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.2786589000024833,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f273a0bcdcf7e54a09a18112e7a22e21107db317b485adbbba32087e7977b6e4",
+                        "source": "langgraph/langgraph/graph/message.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "24fbb69ade57e17a1f7b8e49baa2d9b37955095d37c873ff87ecb16895795aea",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "576df20178872943cea965e3fef0e263c54e1bcd3c938858a336158eac2da6df",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "92b0c9ef91d9641d46a06c139043ba624f31ce90e47fa1f323dc2df88c9eab64",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "54851effaa88959930e4cfe7e648a16cc7ecb3b41d38658c8524ff9b3d33acf8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1931fa957bf60822d91db11498de894579bc0dad1aa1b4b424db70ed2613e839",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 1.2285504000028595,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "92b0c9ef91d9641d46a06c139043ba624f31ce90e47fa1f323dc2df88c9eab64",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "81afc5c69a7df48cb9a455e163f24449ab317dfac8da7c1e697f494ac2aa1153",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4b652e875ba10f45a0216b7bebe172b08c9a69712eb6871f6c19ff4c4bf36a6f",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a7440a8d733c7e046c674a00df2318f58bdd6f4766707beec14cd6e9104245ff",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "637944975f02a69d1c33ec8dd17f820442cb18c2be4626cc6775868bf6caf0a4",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "fd8a1145c6bd58961800db0b7976ee74f12fe9f648dec7313ddf16f4763ebc10",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c71e87efe1898830ade954a441b8bbade9a7dab625b59104d376606d64f0d2c9",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2292dbac75faeeda1f39e07b150d6d16984e850f102e7173df861eead8c797fc",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9a019ad02d534d03c3334a0c177564eb4c2a85cc23372f051f26e234d26a7a8f",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 8.769999840296805e-05,
+                "top_k": 16,
+                "documents": [
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03252247488101534,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "92b0c9ef91d9641d46a06c139043ba624f31ce90e47fa1f323dc2df88c9eab64",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.031099324975891997,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "81afc5c69a7df48cb9a455e163f24449ab317dfac8da7c1e697f494ac2aa1153",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "f273a0bcdcf7e54a09a18112e7a22e21107db317b485adbbba32087e7977b6e4",
+                        "source": "langgraph/langgraph/graph/message.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "4b652e875ba10f45a0216b7bebe172b08c9a69712eb6871f6c19ff4c4bf36a6f",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "a7440a8d733c7e046c674a00df2318f58bdd6f4766707beec14cd6e9104245ff",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "637944975f02a69d1c33ec8dd17f820442cb18c2be4626cc6775868bf6caf0a4",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "24fbb69ade57e17a1f7b8e49baa2d9b37955095d37c873ff87ecb16895795aea",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "fd8a1145c6bd58961800db0b7976ee74f12fe9f648dec7313ddf16f4763ebc10",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "576df20178872943cea965e3fef0e263c54e1bcd3c938858a336158eac2da6df",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 13
+                    },
+                    {
+                        "chunk_id": "c71e87efe1898830ade954a441b8bbade9a7dab625b59104d376606d64f0d2c9",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 14
+                    },
+                    {
+                        "chunk_id": "2292dbac75faeeda1f39e07b150d6d16984e850f102e7173df861eead8c797fc",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014492753623188406,
+                        "reranker_score": null,
+                        "rank": 15
+                    },
+                    {
+                        "chunk_id": "54851effaa88959930e4cfe7e648a16cc7ecb3b41d38658c8524ff9b3d33acf8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014492753623188406,
+                        "reranker_score": null,
+                        "rank": 16
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 2.467148499999894,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "7a13f27bb7e3d17e3a4ea80e636a78b6e682d2f98d6923b1412964216349c729",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f2cb0fb986f47ae8351eb2ab7c2e9e03977a6f4907374ee64f55b00ac6888ff5",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ee971fe168f40a6c433685571917905081617d5e8361372f8f5a017e96df66f5",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3b8a6def758a3a19e1b1c266323e05dafd01081bb7ad4f9ccd29e68a2ac552a4",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "490cd36b6f1941450741d1b39e01a4308fc0f560751d3851d87cd467ae6f13c7",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b5d47d111fef6fe8991efc13cee3a426e6dfdc064d4d285d60776b58cb60f8ff",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a08dd22f1e59c26491133f00b2bc74b079d3141cea6a34edb09eb1cb39852120",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b6c979a83a19f9c83fa351e26f20bf8cef9e55ab1cd7e2a1e3035c0ad8108f67",
+                        "source": "interrupts.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "764561b77139d52b2d3656fa227009e0ea869f127f2648c54a5588528b93d17b",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "92a7f4ebcd7e81c54ff0f8a8cacdfee4b60627600680c03a56236462fa9404d9",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 7.579999510198832e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "3b8a6def758a3a19e1b1c266323e05dafd01081bb7ad4f9ccd29e68a2ac552a4",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.032018442622950824,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "764561b77139d52b2d3656fa227009e0ea869f127f2648c54a5588528b93d17b",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.02877846790890269,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "7a13f27bb7e3d17e3a4ea80e636a78b6e682d2f98d6923b1412964216349c729",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "f2cb0fb986f47ae8351eb2ab7c2e9e03977a6f4907374ee64f55b00ac6888ff5",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "3cb5bdb639288a2b52da09387ca01f995096dbf8a38269bbbc900636ed942980",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "ee971fe168f40a6c433685571917905081617d5e8361372f8f5a017e96df66f5",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "d60a824d510f99c48a977fc1422cf50fa38047ff74249f86209fb4961d10bfe9",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "5e290460a8a5b32c99fdef534f6bc3f7031b75b520b77ee5625da7061fe1141b",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "490cd36b6f1941450741d1b39e01a4308fc0f560751d3851d87cd467ae6f13c7",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "4e297e8845eb7810bda3f72017a327e2bb57362040fdfa8eae1496d018b97b96",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "b5d47d111fef6fe8991efc13cee3a426e6dfdc064d4d285d60776b58cb60f8ff",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "6eae54191c097e8f68f9266b4d1fa313c7c09b8ef100f9b3adaba271eace7b33",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 3.2701327000104357,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "7a13f27bb7e3d17e3a4ea80e636a78b6e682d2f98d6923b1412964216349c729",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 9.986411094665527,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "3b8a6def758a3a19e1b1c266323e05dafd01081bb7ad4f9ccd29e68a2ac552a4",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 9.220827102661133,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "ee971fe168f40a6c433685571917905081617d5e8361372f8f5a017e96df66f5",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 8.948933601379395,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "8d368f4baf77105c5feccebfaada3c1644b547420321cb9fb164eb54635dc836",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 8.389121055603027,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "a7440a8d733c7e046c674a00df2318f58bdd6f4766707beec14cd6e9104245ff",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 8.338567733764648,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "f2cb0fb986f47ae8351eb2ab7c2e9e03977a6f4907374ee64f55b00ac6888ff5",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 8.287261962890625,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "92b0c9ef91d9641d46a06c139043ba624f31ce90e47fa1f323dc2df88c9eab64",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 7.93208646774292,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "fd8a1145c6bd58961800db0b7976ee74f12fe9f648dec7313ddf16f4763ebc10",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 7.841873645782471,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "b5d47d111fef6fe8991efc13cee3a426e6dfdc064d4d285d60776b58cb60f8ff",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 7.788692951202393,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "4b652e875ba10f45a0216b7bebe172b08c9a69712eb6871f6c19ff4c4bf36a6f",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 7.758625507354736,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "c71e87efe1898830ade954a441b8bbade9a7dab625b59104d376606d64f0d2c9",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 7.661291599273682,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "d60a824d510f99c48a977fc1422cf50fa38047ff74249f86209fb4961d10bfe9",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 7.64394474029541,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "81afc5c69a7df48cb9a455e163f24449ab317dfac8da7c1e697f494ac2aa1153",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 7.60777473449707,
+                        "rank": 13
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.002719500014791265,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "4d6e60ab7ce659cd2eee9005b7efaca016cb1aba6e7d2b1c00c2948d0c443597",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f29a209a1b6efa33b6c86b4b84bced941348a79a2d7ddbbcee01f25fe15508eb",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b812d0abe6f01d528bee9f2636a55fefe722e384a45c4e0f3d8edb070065f2ba",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "97f9f4016a9a7df053b94d894d0f0a0d7b568c7939920cbb06b67b6b54981782",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8228d6cd1856b8e45b309839eaf84b49a3e323198adecd6829c9ecceb0c60a48",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3ed12807ee4b291fd2f830f93c471644e90b31defe427688b3345ccbabf0f8f9",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "01e8887033d45709e0456be2cec6debd6352a6e9439e370d75e8eac600300a2f",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ae5143585c6fdaa3459f348dfd8effac50b83bf1551bc1452cb90e9fc51d1a2b",
+                        "source": "prebuilt/langgraph/prebuilt/chat_agent_executor.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3a628dcf042607a601b5b115bc77e91d038992dc65c4085c4fdff16b1654738d",
+                        "source": "prebuilt/langgraph/prebuilt/_tool_call_transformer.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f9b615bd15ebf0dca1848ae94e37f8e12d4f471c26437c183d1e9bc288deebef",
+                        "source": "prebuilt/langgraph/prebuilt/chat_agent_executor.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 0.8241586999793071,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "97f9f4016a9a7df053b94d894d0f0a0d7b568c7939920cbb06b67b6b54981782",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2db9971c8f732f352a900378edbf32c94765942a01d9b4010e86ce648e2fc41c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3ed12807ee4b291fd2f830f93c471644e90b31defe427688b3345ccbabf0f8f9",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "01e8887033d45709e0456be2cec6debd6352a6e9439e370d75e8eac600300a2f",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "376348d61051af2f1ba45856c028009231f42f6218518e1bc573fbd0f8c5cf0c",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3fe75f270a82f111051600004716dd0fbfba08ea5c5960747502c7e925ed4a17",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "76b1822194ecac9f691f6b3238f06db4450ee09aad60c2d56955ad2bf466a0c4",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7646d8b62cec879366dd801c6535f54e056262e8b05eafd5329da4a36f612c0d",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f24d68af008f39775ec3c346e2c8da1e5c132b27b5c80d067bad49042c0aaf9e",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "edb712c9e7d8b68fb807989213f6d91162665c00c029307cdd5613d9d4eb6c6a",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.080001963302493e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "97f9f4016a9a7df053b94d894d0f0a0d7b568c7939920cbb06b67b6b54981782",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.032018442622950824,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "3ed12807ee4b291fd2f830f93c471644e90b31defe427688b3345ccbabf0f8f9",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.031024531024531024,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "01e8887033d45709e0456be2cec6debd6352a6e9439e370d75e8eac600300a2f",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03055037313432836,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "4d6e60ab7ce659cd2eee9005b7efaca016cb1aba6e7d2b1c00c2948d0c443597",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "2db9971c8f732f352a900378edbf32c94765942a01d9b4010e86ce648e2fc41c",
+                        "source": "langgraph/langgraph/pregel/_loop.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "f29a209a1b6efa33b6c86b4b84bced941348a79a2d7ddbbcee01f25fe15508eb",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "b812d0abe6f01d528bee9f2636a55fefe722e384a45c4e0f3d8edb070065f2ba",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "376348d61051af2f1ba45856c028009231f42f6218518e1bc573fbd0f8c5cf0c",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 0.6891207000007853,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "97f9f4016a9a7df053b94d894d0f0a0d7b568c7939920cbb06b67b6b54981782",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 9.823211669921875,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "b812d0abe6f01d528bee9f2636a55fefe722e384a45c4e0f3d8edb070065f2ba",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 9.064743995666504,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "3ed12807ee4b291fd2f830f93c471644e90b31defe427688b3345ccbabf0f8f9",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 8.954787254333496,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "01e8887033d45709e0456be2cec6debd6352a6e9439e370d75e8eac600300a2f",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 8.942625045776367,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "376348d61051af2f1ba45856c028009231f42f6218518e1bc573fbd0f8c5cf0c",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 8.7814302444458,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 1.6000053999887314,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "7a13f27bb7e3d17e3a4ea80e636a78b6e682d2f98d6923b1412964216349c729",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 9.986411094665527,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "3b8a6def758a3a19e1b1c266323e05dafd01081bb7ad4f9ccd29e68a2ac552a4",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 9.220827102661133,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "ee971fe168f40a6c433685571917905081617d5e8361372f8f5a017e96df66f5",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 8.948933601379395,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "8d368f4baf77105c5feccebfaada3c1644b547420321cb9fb164eb54635dc836",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 8.389121055603027,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "a7440a8d733c7e046c674a00df2318f58bdd6f4766707beec14cd6e9104245ff",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 8.338567733764648,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "f2cb0fb986f47ae8351eb2ab7c2e9e03977a6f4907374ee64f55b00ac6888ff5",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 8.287261962890625,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "92b0c9ef91d9641d46a06c139043ba624f31ce90e47fa1f323dc2df88c9eab64",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 7.93208646774292,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "fd8a1145c6bd58961800db0b7976ee74f12fe9f648dec7313ddf16f4763ebc10",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 7.841873645782471,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "b812d0abe6f01d528bee9f2636a55fefe722e384a45c4e0f3d8edb070065f2ba",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 7.834095478057861,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "b5d47d111fef6fe8991efc13cee3a426e6dfdc064d4d285d60776b58cb60f8ff",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 7.788692951202393,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "4b652e875ba10f45a0216b7bebe172b08c9a69712eb6871f6c19ff4c4bf36a6f",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 7.758625507354736,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "3ed12807ee4b291fd2f830f93c471644e90b31defe427688b3345ccbabf0f8f9",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 7.68156099319458,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "01e8887033d45709e0456be2cec6debd6352a6e9439e370d75e8eac600300a2f",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 7.68156099319458,
+                        "rank": 13
+                    }
+                ]
+            }
+        ],
+        "generation_metrics": [
+            {
+                "name": "Initial Generation",
+                "answer": "## Retrieved facts\n\n`ToolNode` treats a `Command` differently from a normal tool result:\n\n- `_normalize_tool_response` preserves a returned `Command` after validating it; it does not convert the `Command` into a `ToolMessage`.\n- `_combine_tool_outputs` preserves `Command` objects as command outputs. Non-command outputs are wrapped as message updates, using either a list or `{messages: [...]}` depending on the input shape.\n- For a `Command` with a dictionary update, `_validate_tool_command` permits state updates such as `{\"user_name\": \"Alice\"}` when `ToolNode` receives dictionary-style graph input.\n- However, when the command is applied to the current graph, `_validate_tool_command` requires `Command.update[\"messages\"]` to contain a `ToolMessage` matching the original tool-call ID. The documentation states the same requirement: a tool returning `Command` must include `messages`—or the configured message-history state key—and that list must contain a `ToolMessage`.\n\nTherefore, a `Command` state update and a message-stream event are separate concerns. The state update can change `user_name`, but the `Command` itself is not a `ToolMessage` and does not automatically become one merely because it contains a state update. A corresponding message event requires a `ToolMessage` to be produced and included in the message-history update.\n\nFor example, the command-based tool result should include both updates:\n\n```python\nfrom langchain_core.messages import ToolMessage\n\nreturn Command(\n    update={\n        \"user_name\": \"Alice\",\n        \"messages\": [\n            ToolMessage(\n                content=\"User found\",\n                tool_call_id=tool_call_id,\n            )\n        ],\n    }\n)\n```\n\nThe exact way the tool obtains `tool_call_id` is not established by the retrieved context, so the snippet is illustrative rather than a complete supported implementation. The important documented requirement is that the `ToolMessage.tool_call_id` match the tool call. The warning and validator indicate that omitting this message is invalid when the command is sent to the current graph.\n\n## Applying this to the observed behavior\n\nThe reported observation—`user_name` is updated but no `ToolMessage` appears—means that the state-update path and the message-event path are not equivalent. The state update may be applied by graph command processing, while no message event is emitted unless a matching `ToolMessage` is included in the command's message update and the streaming layer forwards that update through the selected stream mode.\n\nThere is an important discrepancy with the shown code: according to the retrieved `ToolNode` implementation, `Command(update={\"user_name\": \"Alice\"})` lacks the required matching `ToolMessage`. For a command targeting the current graph, `_validate_tool_command` should raise a `ValueError` stating that every tool call must have a corresponding `ToolMessage`; it should not be considered a complete valid `ToolNode` result. The retrieved context does not explain how the application could nevertheless apply the state update without that validation error—for example, it may be using a different version, a different command target, or code not shown here.\n\n## Stream information to consume\n\nThe retrieved context confirms that `ToolNode` can return command-based state updates and that message history is represented by `ToolMessage` objects. It does **not** include the graph streaming implementation or documentation defining precisely which event payloads are emitted by `stream_mode=\"messages\"` versus a state-update stream mode. Consequently, the exact combined stream syntax and event schema cannot be stated as a retrieved fact here.\n\nAt the conceptual level, the application needs both categories of stream information:\n\n1. **Message/token events** for model and tool-message rendering.\n2. **State-update events** for updates such as `{\"user_name\": \"Alice\"}`.\n\nThus, it should consume a combined stream containing the messages stream and the state-update stream, rather than assuming that `stream_mode=\"messages\"` also reports every arbitrary graph-state update. The exact mode name and tuple/payload shape require the missing graph-streaming documentation or implementation evidence.\n\n`ToolNode` is specifically documented as the prebuilt node that executes tools, handles tool execution, and propagates `Command` results into graph state. The quickstart's custom tool node, by contrast, explicitly returns a `ToolMessage` in `{\"messages\": result}`, which is why that pattern directly supplies a message-history result.",
+                "answer_length": 4575,
+                "prompt_tokens": 6951,
+                "completion_tokens": 1343,
+                "total_tokens": 8294,
+                "estimated_cost": 0.0030018,
+                "generation_latency": 14.210325499996543,
+                "is_complete": false,
+                "round_number": null,
+                "gaps_detected": [
+                    "Graph streaming behavior for stream_mode=\"messages\" and combined stream modes"
+                ]
+            },
+            {
+                "name": "Gap Generation Round 1",
+                "answer": "## Retrieved facts\n\n`stream_mode=\"messages\"` is a message-token stream, not a general graph-state stream. The `Pregel.stream` implementation documents this mode as emitting LLM messages token-by-token together with invocation metadata. By contrast:\n\n- `stream_mode=\"updates\"` emits node/task names and the updates returned after each step.\n- `stream_mode=\"values\"` emits the complete state after each step.\n- Multiple modes can be requested by passing a sequence of modes; the output is then emitted as `(mode, data)` tuples.\n\nA `Command` returned by a tool is handled by `ToolNode._normalize_tool_response`. The command is validated and returned as a `Command`; `ToolNode` does not automatically create a `ToolMessage` merely because the command updates graph state. A command can contain:\n\n- a dictionary update, such as `Command(update={\"user_name\": \"Alice\"})`, when `ToolNode` receives dictionary-style state input;\n- a list of messages in `Command.update` when it receives list-style message input; or\n- another command form that is passed through without message normalization.\n\nFor a command sent to the current graph, `_validate_tool_command` requires a matching `ToolMessage` in the update, unless the command targets another graph or removes all messages. The documentation also explicitly warns that a tool returning `Command` must include the message-history state key and that the update must contain a `ToolMessage`.\n\nTherefore, the shown return value:\n\n```python\nCommand(update={\"user_name\": \"Alice\"})\n```\n\ndoes update `user_name` conceptually, but it does not represent a completed tool result in the `messages` state. According to the retrieved implementation, for a current-graph `ToolNode` command it should normally fail validation because no matching `ToolMessage` is present. If the command is accepted through a different execution path or configuration, the state update can still be applied without creating a message-stream event: state-channel updates and `messages`-stream events are separate mechanisms.\n\nThe relevant distinction is:\n\n1. `Command.update` changes graph state. A command that updates `user_name` can therefore affect the resulting state.\n2. `stream_mode=\"messages\"` reports message events, specifically LLM message/token events. It does not report every state update and does not synthesize a `ToolMessage` from arbitrary command fields.\n3. A `ToolMessage` must be explicitly included in the command's `messages` update when the tool result is intended to become part of the message history. The implementation accepts it either directly in a list-style update or under the configured messages key for dictionary-style input, and validates that its `tool_call_id` matches the originating tool call.\n\nThe application should consume the state-oriented stream as well as the message stream. For example:\n\n```python\nfor mode, data in graph.stream(\n    {\"messages\": [ai_message_with_tool_call]},\n    stream_mode=[\"messages\", \"updates\"],\n):\n    if mode == \"messages\":\n        # LLM/message token events\n        handle_message_event(data)\n    elif mode == \"updates\":\n        # Node updates, including the ToolNode/Command state update\n        handle_state_update(data)\n```\n\nUse `\"values\"` instead of or in addition to `\"updates\"` when the frontend needs the complete state after each step. If the frontend specifically needs a completed tool call in message history, the tool should return a `Command` whose update includes both the application-state change and a matching `ToolMessage` under `messages`, as required by the documentation and `ToolNode` validation. The retrieved context does not specify the exact `ToolMessage` constructor/import syntax for this particular version, so that construction should follow the version's message API rather than being inferred here.\n\n## Conclusion\n\nThe missing event is explained by confusing graph-state updates with message-stream events. `messages` does not expose arbitrary `Command.update` fields. Consume `updates` or `values` for state changes, and combine that mode with `messages` when the application needs both LLM/message events and graph-state updates. Also, a current-graph command-based tool result must include a matching `ToolMessage`; the example command omits it and is contrary to the documented `ToolNode` contract.",
+                "answer_length": 4317,
+                "prompt_tokens": 9596,
+                "completion_tokens": 1311,
+                "total_tokens": 10907,
+                "estimated_cost": 0.0034924,
+                "generation_latency": 13.469594199996209,
+                "is_complete": true,
+                "round_number": 1,
+                "gaps_detected": []
+            }
+        ],
+        "judge_evaluation": {
+            "correctness": {
+                "score": 5.0,
+                "justification": "The answer correctly explains the distinction between state updates via Command and message-stream events, how ToolNode handles commands, why the ToolMessage was missing, and which stream modes to consume, all consistent with the retrieved context."
+            },
+            "groundedness": {
+                "score": 5.0,
+                "justification": "All significant technical claims, including the descriptions of stream modes, ToolNode's validation logic for Commands, and the requirement for ToolMessage in Command.update, are directly supported by the provided documentation and source code."
+            },
+            "completeness": {
+                "score": 5.0,
+                "justification": "The answer thoroughly addresses all parts of the user's question, covering the distinction between state updates and message events, ToolNode's behavior, the reason for the missing event, and the necessary stream consumption, incorporating all relevant expected concepts."
+            },
+            "hallucination": {
+                "score": 0.0,
+                "justification": "The answer contains no unsupported or fabricated technical claims and adheres strictly to the information provided in the retrieved context."
+            },
+            "missing_concepts": [],
+            "unsupported_claims": []
+        },
+        "overall_metrics": {
+            "total_latency": 40.83941099999356,
+            "total_cost": 0.0177918,
+            "recall_at_k": 0.5,
+            "precision_at_k": 0.14285714285714285,
+            "hit_rate": 1.0,
+            "mrr": 0.25
+        }
+    }
+]

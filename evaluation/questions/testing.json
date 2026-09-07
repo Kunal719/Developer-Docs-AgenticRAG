@@ -1,49 +1,45 @@
 [
- {
-  "id": 13,
-  "category": "debugging",
-  "intent": "long_running_tool_recovery",
-  "difficulty": "very_hard",
-  "question": "A production LangGraph workflow executes a long-running external tool that can take several minutes to complete. The workflow uses checkpointing for durable execution. The tool sometimes completes successfully, but the process fails or loses progress before the tool result is durably recorded. After recovery, the same tool operation is executed again, and the external system reports duplicate operations. Review this architecture and determine how LangGraph checkpointing, task boundaries, durable execution, retries, and external side effects interact. Explain whether checkpointing provides exactly-once execution of the external operation, when unfinished work can be executed again, and how the application should be designed to prevent duplicate side effects while still allowing recovery.",
-  "queries": [
-    "How does LangGraph durable execution recover a workflow after a failure during a long-running task?",
-    "How should LangGraph tasks be used around external API calls and side effects so completed work can be recovered safely?",
-    "When can an unfinished LangGraph task be executed again after checkpoint recovery?",
-    "Does LangGraph checkpointing guarantee exactly-once execution of external side effects?",
-    "How should external side effects in LangGraph be made idempotent when tasks can be retried or re-executed?",
-    "What guarantees does LangGraph provide for checkpoint recovery, task replay, and failed task execution?"
-  ],
-  "code_snippet": "def process_order(state):\n    result = external_api.process_order(state[\"order_id\"])\n    return {\"order_result\": result}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"process_order\", process_order)\nbuilder.add_edge(START, \"process_order\")\nbuilder.add_edge(\"process_order\", END)\n\ngraph = builder.compile(checkpointer=checkpointer)\n\nconfig = {\n    \"configurable\": {\n        \"thread_id\": \"order-123\"\n    }\n}\n\nresult = graph.invoke(\n    {\"order_id\": \"order-123\"},\n    config=config\n)",
-  "error": null,
-  "observed_behavior": "The external operation sometimes completes successfully, but after a process failure the workflow resumes and executes the same operation again. The external system records two operations for the same order.",
-  "expected_behavior": "The workflow should recover from failures without unintentionally duplicating external side effects. Completed work should be recoverable, while incomplete work should be safe to retry.",
-  "logs": null,
-  "expected_files": [
-    "fault-tolerance.mdx",
-    "persistence.mdx",
-    "checkpointers.mdx",
-    "use-graph-api.mdx",
-    "workflows-agents.mdx"
-  ],
-  "concepts": [
-    "durable execution",
-    "checkpointing",
-    "tasks",
-    "fault tolerance",
-    "retries",
-    "external side effects",
-    "idempotency",
-    "exactly-once execution",
-    "recovery"
-  ],
-  "tags": [
-    "long_running_tool",
-    "duplicate_execution",
-    "checkpoint_recovery",
-    "durable_execution",
-    "side_effects",
-    "idempotency",
-    "retry_safety"
-  ]
-}
+  {
+    "id": 25,
+    "category": "debugging",
+    "intent": "parallel_tool_interrupt_collection_and_resume",
+    "difficulty": "very_hard",
+    "question": "Three tools are executed in parallel by ToolNode and each tool calls interrupt(). All three tools reach their interrupt, but the checkpoint state contains fewer interrupts than expected and, after resuming with the captured interrupt map, a resume value can be delivered to the wrong tool. Trace how interrupt exceptions are collected from parallel tasks, how pending interrupts are stored in task/checkpoint state, how interrupt namespaces and IDs are associated with individual tasks, and how the resume map is matched back to the task that originally raised each interrupt.",
+    "queries": [
+      "How does ToolNode execute multiple tool calls concurrently?",
+      "Where does LangGraph collect interrupts raised by parallel tasks?",
+      "How are pending interrupts stored in Pregel task state?",
+      "How does LangGraph map a resume value back to the task that raised an interrupt?",
+      "How do interrupt namespaces distinguish parallel tool executions?",
+      "Why could a resume value be delivered to the wrong parallel tool?"
+    ],
+    "code_snippet": "from langgraph.prebuilt import ToolNode\nfrom langgraph.types import interrupt, Command\nfrom langgraph.checkpoint.memory import InMemorySaver\n\n\ndef create_circle():\n    return interrupt({\"tool\": \"circle\", \"question\": \"approve circle?\"})\n\ndef create_square():\n    return interrupt({\"tool\": \"square\", \"question\": \"approve square?\"})\n\ndef create_triangle():\n    return interrupt({\"tool\": \"triangle\", \"question\": \"approve triangle?\"})\n\n# A ToolNode receives three tool calls in the same graph step.\n# All three tools reach interrupt().\n# The application reads graph.get_state(config).tasks and constructs:\n# Command(resume={interrupt_id: response})",
+    "error": null,
+    "observed_behavior": "Only some parallel interrupts may be exposed or a resume value may be associated with the wrong tool.",
+    "expected_behavior": "Every pending interrupt should remain associated with its originating task and resume value.",
+    "expected_files": [
+      "interrupts.mdx",
+      "langgraph/langgraph/types.py",
+      "prebuilt/langgraph/prebuilt/tool_node.py",
+      "prebuilt/langgraph/prebuilt/interrupt.py",
+      "langgraph/langgraph/pregel/_loop.py",
+      "langgraph/langgraph/pregel/_algo.py",
+      "langgraph/langgraph/pregel/_runner.py"
+    ],
+    "concepts": [
+      "ToolNode",
+      "parallel execution",
+      "pending interrupts",
+      "task state",
+      "resume mapping",
+      "interrupt namespace"
+    ],
+    "tags": [
+      "ToolNode",
+      "parallel_interrupts",
+      "pending_interrupts",
+      "resume",
+      "task_mapping"
+    ]
+  }
 ]

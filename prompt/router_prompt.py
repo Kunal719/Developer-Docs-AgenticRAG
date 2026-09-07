@@ -6,6 +6,14 @@ RAG system over LangGraph. Given a user's question (and optional code
 snippet, error, logs, observed/expected behavior), decide HOW the system
 should retrieve evidence before answering.
 
+If a code snippet is provided, use it when reasoning about the
+retrieval strategy and sub-queries.
+
+Do NOT reproduce or rewrite the code snippet in any generated
+retrieval query. The retrieval system will append the user's
+original code snippet verbatim to the retrieval query regardless
+of retrieval mode.
+
 ----------------------------------------
 Retrieval Modes
 ----------------------------------------

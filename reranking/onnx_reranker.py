@@ -1,9 +1,9 @@
 from pathlib import Path
 from time import perf_counter
-
 import numpy as np
 import onnxruntime as ort
 from transformers import AutoTokenizer
+import threading
 
 from reranking.base_reranker import BaseReranker
 from langchain_core.documents import Document
@@ -114,9 +114,28 @@ class ONNXReranker(BaseReranker):
 
         start_time = perf_counter()
 
+        start_predict_time = perf_counter()
+
+        print(
+            f"[RERANK START] "
+            f"thread={threading.current_thread().name} "
+            f"docs={len(documents)} "
+            f"time={start_predict_time:.3f}"
+        )
+
         scores = self._predict(
             query=query,
             documents=documents,
+        )
+
+        end_predict_time = perf_counter()
+
+        print(
+            f"[RERANK END] "
+            f"thread={threading.current_thread().name} "
+            f"docs={len(documents)} "
+            f"time={end_predict_time:.3f} "
+            f"duration={end_predict_time - start_predict_time:.3f}s"
         )
 
         scored_docs = list(

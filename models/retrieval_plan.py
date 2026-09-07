@@ -23,9 +23,7 @@ class MetadataFilters(BaseModel):
     @model_validator(mode="after")
     def _category_requires_doc_corpus(self) -> "MetadataFilters":
         if self.category and self.corpus != "documentation":
-            raise ValueError(
-                "category requires corpus='documentation'"
-            )
+            self.category = None
 
         return self
 
