@@ -1,0 +1,490 @@
+[
+    {
+        "question": {
+            "question": "Explain how state flows through a LangGraph execution.",
+            "code_snippet": null,
+            "error": null,
+            "logs": null,
+            "observed_behavior": null,
+            "expected_behavior": null,
+            "id": 14,
+            "category": "reasoning",
+            "intent": "multi_document_reasoning",
+            "difficulty": "hard",
+            "expected_files": [
+                "graph-api.mdx",
+                "use-graph-api.mdx",
+                "pregel.mdx",
+                "langgraph/langgraph/graph/state.py",
+                "langgraph/langgraph/pregel/main.py"
+            ],
+            "concepts": [
+                "StateGraph",
+                "graph execution",
+                "state management",
+                "reducers"
+            ],
+            "tags": null,
+            "evidence": null,
+            "queries": null
+        },
+        "final_answer": "LangGraph execution can be understood as a shared state being transformed as control moves through a graph.\n\n1. **Define the state.** The state is a shared data structure representing the current snapshot of the application. It also defines the graph's schema; by default, the graph uses the same state schema for its input and output. In Python, this can be a `TypedDict`, Pydantic model, or dataclass.\n\n2. **Start with an input state.** Execution begins at the graph's `START` edge, which points to the first node. For example, a graph can define `START -> step_1 -> step_2 -> step_3`.\n\n3. **A node reads the current state and returns updates.** Nodes are functions that receive the current state, perform computation or side effects, and return an updated state. A node does not need to return every state key; it can specify only the key or keys it wants to update.\n\n4. **Apply each update to the state.** By default, an update overwrites the corresponding key. A reducer can change this behavior—for example, by appending successive values to a list instead of replacing it. Thus, state can either be replaced key-by-key or combined according to the reducer configured for that key.\n\n5. **Follow edges to choose the next node.** Edges determine which node executes next. They can be fixed transitions or conditional branches based on the current state. In short, nodes do the work and edges determine what happens next. This process can form sequential, branching, or looping workflows.\n\nFor example, in the documented linear test graph:\n\n- `START` routes to `node1`.\n- `node1` returns `{\"my_key\": \"hello from node1\"}`, so `my_key` is updated.\n- The edge from `node1` routes execution to `node2`.\n- `node2` returns `{\"my_key\": \"hello from node2\"}`, overwriting that key under the default update behavior.\n- The edge from `node2` routes execution to `END`.\n\nThe documentation also states that state persists throughout an agent's execution. When a checkpointer is configured, state can be checkpointed between node executions, which supports persistence, resuming interrupted workflows, and time-travel operations. These are documented capabilities; the retrieved context does not specify the complete internal checkpointing algorithm.\n\nFor graphs with loops, LangGraph limits the number of super-steps in one execution using the recursion limit. If that limit is reached, the documentation says LangGraph raises `GraphRecursionError`.",
+        "experiment_metadata": {
+            "version": "v7",
+            "timestamp": "2026-09-10T16:40:25.189617",
+            "embedding_model": "text-embedding-3-small",
+            "llm_provider": "openai",
+            "llm": "gpt-5.6-luna",
+            "chunk_size": 1200,
+            "chunk_overlap": 200,
+            "dense_top_k": 10,
+            "bm25_top_k": 10,
+            "hybrid_top_k": 16,
+            "rrf_k": 60,
+            "reranker_top_k": 13,
+            "reranker_name": "BAAI/bge-reranker-base",
+            "judge_model": "gemini-2.5-flash",
+            "judge_llm_provider": "google_genai",
+            "router_llm": "gpt-5.6-luna",
+            "router_llm_provider": "openai"
+        },
+        "router_metrics": {
+            "name": "Query Router",
+            "prompt_tokens": 1551,
+            "completion_tokens": 191,
+            "total_tokens": 1742,
+            "estimated_cost": 0.0005394,
+            "router_latency": 3.9775578000117093
+        },
+        "retrieval_plan": {
+            "retrieval_mode": "direct",
+            "reasoning": "A broad but single conceptual question about the lifecycle of state during LangGraph execution; one focused documentation retrieval pass should cover graph input, node updates, state merging, transitions, and final output.",
+            "sub_queries": null,
+            "combined_query": null,
+            "metadata_filters": {
+                "corpus": "documentation",
+                "module_names": null,
+                "class_names": null,
+                "function_names": null,
+                "category": "general"
+            }
+        },
+        "pipeline_stages": [
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.004239700036123395,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "b61344722a90b589bb1d33e9ac38ed3de0d24fd5b686f457bfdf390531684613",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0d82fbf5d6e15c14f0c820d7e2d3727bed49162d09316e50220f37c5d768fb71",
+                        "source": "fault-tolerance.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8638fa2654eb77b960500778af1043aa243ac105e5b04fc16c9c8ca6f80da09d",
+                        "source": "test.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "69a868048b1c84ea346345fe3fced22734b1cb4b91474f906101fea713aed8d7",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d70d6c34c52b1b4a47cb2925ac19b66bde3b664f2ce6b2e28014bf033cd0a15c",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "05ada364f15c3c043d0777e3e2136792e33b086368fa61fbca564a2960ad5e6a",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "e0c18edfed0e7b0e48cc1a0f825fd93a8e05bf304d416aeb21d92a6257ded501",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "81aa778e33091beb5adca8f0e7a872b1a5044a01f7eb6e85bbb992e33dcfa2d8",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "be222a774cc72007cc75778b06f15e1ec7f692bdfdf7c5cb218bc6bef6ede5a1",
+                        "source": "thinking-in-langgraph.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 2.2228496000170708,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "6d0997c9742952b28a3434b65fd2e66662988c9712baf69aae23f008addb0033",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "107b228a9816ae6779661c1293839abcd0c22401dd13bf61e42d18ca0d2d3287",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c737bacf76910f7cf2556140a9a6daa59b9e40509900245602e307fd27a16894",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "0cc87ef29e44f3b61b27fd17aa97b914095c3aeb278aa32f6cfff6584f85f599",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5b98605c8ee9333f689df333c36e25ff225e4af100c8286b2363d91af818f1da",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5e137139e31f1e530fe74fe2565f2abb1d7cf71b659374f72e34998f2bab8823",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ee01a077f6af1693dc2fda971f2b682962a2ef68774586b853e46a608eccb228",
+                        "source": "fault-tolerance.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "05ada364f15c3c043d0777e3e2136792e33b086368fa61fbca564a2960ad5e6a",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "94073545d26c5822a7648b7b6b3825702fe0324543b689deeace68ebfadf2d61",
+                        "source": "use-functional-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "753e055b5dea67879eb67cfd9823225a693bca2c6cae6808455f6647f3a87c71",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.7200010158121586e-05,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "05ada364f15c3c043d0777e3e2136792e33b086368fa61fbca564a2960ad5e6a",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.029857397504456328,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "6d0997c9742952b28a3434b65fd2e66662988c9712baf69aae23f008addb0033",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "b61344722a90b589bb1d33e9ac38ed3de0d24fd5b686f457bfdf390531684613",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "107b228a9816ae6779661c1293839abcd0c22401dd13bf61e42d18ca0d2d3287",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "0d82fbf5d6e15c14f0c820d7e2d3727bed49162d09316e50220f37c5d768fb71",
+                        "source": "fault-tolerance.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "c737bacf76910f7cf2556140a9a6daa59b9e40509900245602e307fd27a16894",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "8638fa2654eb77b960500778af1043aa243ac105e5b04fc16c9c8ca6f80da09d",
+                        "source": "test.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "0cc87ef29e44f3b61b27fd17aa97b914095c3aeb278aa32f6cfff6584f85f599",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "69a868048b1c84ea346345fe3fced22734b1cb4b91474f906101fea713aed8d7",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "5b98605c8ee9333f689df333c36e25ff225e4af100c8286b2363d91af818f1da",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "d70d6c34c52b1b4a47cb2925ac19b66bde3b664f2ce6b2e28014bf033cd0a15c",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "5e137139e31f1e530fe74fe2565f2abb1d7cf71b659374f72e34998f2bab8823",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 1.4792854000115767,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "8638fa2654eb77b960500778af1043aa243ac105e5b04fc16c9c8ca6f80da09d",
+                        "source": "test.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 2.587364673614502,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "5b98605c8ee9333f689df333c36e25ff225e4af100c8286b2363d91af818f1da",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 1.1014634370803833,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "05ada364f15c3c043d0777e3e2136792e33b086368fa61fbca564a2960ad5e6a",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.32217517495155334,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "6d0997c9742952b28a3434b65fd2e66662988c9712baf69aae23f008addb0033",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.1795281022787094,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "b61344722a90b589bb1d33e9ac38ed3de0d24fd5b686f457bfdf390531684613",
+                        "source": "workflows-agents.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.03891855478286743,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "0cc87ef29e44f3b61b27fd17aa97b914095c3aeb278aa32f6cfff6584f85f599",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -0.055578507483005524,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "c737bacf76910f7cf2556140a9a6daa59b9e40509900245602e307fd27a16894",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -0.1797073632478714,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "d70d6c34c52b1b4a47cb2925ac19b66bde3b664f2ce6b2e28014bf033cd0a15c",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -0.49234434962272644,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "0d82fbf5d6e15c14f0c820d7e2d3727bed49162d09316e50220f37c5d768fb71",
+                        "source": "fault-tolerance.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -0.9873173832893372,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "107b228a9816ae6779661c1293839abcd0c22401dd13bf61e42d18ca0d2d3287",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -1.4925330877304077,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "69a868048b1c84ea346345fe3fced22734b1cb4b91474f906101fea713aed8d7",
+                        "source": "quickstart.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -1.745047688484192,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "5e137139e31f1e530fe74fe2565f2abb1d7cf71b659374f72e34998f2bab8823",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -2.8073651790618896,
+                        "rank": 12
+                    }
+                ]
+            }
+        ],
+        "generation_metrics": [
+            {
+                "name": "Initial Generation",
+                "answer": "LangGraph execution can be understood as a shared state being transformed as control moves through a graph.\n\n1. **Define the state.** The state is a shared data structure representing the current snapshot of the application. It also defines the graph's schema; by default, the graph uses the same state schema for its input and output. In Python, this can be a `TypedDict`, Pydantic model, or dataclass.\n\n2. **Start with an input state.** Execution begins at the graph's `START` edge, which points to the first node. For example, a graph can define `START -> step_1 -> step_2 -> step_3`.\n\n3. **A node reads the current state and returns updates.** Nodes are functions that receive the current state, perform computation or side effects, and return an updated state. A node does not need to return every state key; it can specify only the key or keys it wants to update.\n\n4. **Apply each update to the state.** By default, an update overwrites the corresponding key. A reducer can change this behavior—for example, by appending successive values to a list instead of replacing it. Thus, state can either be replaced key-by-key or combined according to the reducer configured for that key.\n\n5. **Follow edges to choose the next node.** Edges determine which node executes next. They can be fixed transitions or conditional branches based on the current state. In short, nodes do the work and edges determine what happens next. This process can form sequential, branching, or looping workflows.\n\nFor example, in the documented linear test graph:\n\n- `START` routes to `node1`.\n- `node1` returns `{\"my_key\": \"hello from node1\"}`, so `my_key` is updated.\n- The edge from `node1` routes execution to `node2`.\n- `node2` returns `{\"my_key\": \"hello from node2\"}`, overwriting that key under the default update behavior.\n- The edge from `node2` routes execution to `END`.\n\nThe documentation also states that state persists throughout an agent's execution. When a checkpointer is configured, state can be checkpointed between node executions, which supports persistence, resuming interrupted workflows, and time-travel operations. These are documented capabilities; the retrieved context does not specify the complete internal checkpointing algorithm.\n\nFor graphs with loops, LangGraph limits the number of super-steps in one execution using the recursion limit. If that limit is reached, the documentation says LangGraph raises `GraphRecursionError`.",
+                "answer_length": 2439,
+                "prompt_tokens": 5363,
+                "completion_tokens": 648,
+                "total_tokens": 6011,
+                "estimated_cost": 0.0018502,
+                "generation_latency": 8.626563100027852,
+                "is_complete": true,
+                "round_number": null,
+                "gaps_detected": []
+            }
+        ],
+        "judge_evaluation": {
+            "correctness": {
+                "score": 5.0,
+                "justification": "The answer accurately describes how state flows through a LangGraph execution, including state definition, node updates, edge transitions, reducers, persistence, and recursion limits, all consistent with the retrieved context. The example provided is also correctly interpreted from the context."
+            },
+            "groundedness": {
+                "score": 5.0,
+                "justification": "All significant technical claims in the answer are directly supported by the retrieved context. The answer correctly attributes information to the documentation and accurately reflects the limitations of the context regarding internal algorithms."
+            },
+            "completeness": {
+                "score": 5.0,
+                "justification": "The answer thoroughly addresses the user's question by explaining all important aspects of state flow in LangGraph, including state definition, node interactions, edge control, reducers, persistence, and recursion limits. It also effectively uses an example from the context to illustrate the process."
+            },
+            "hallucination": {
+                "score": 0.0,
+                "justification": "There are no unsupported or fabricated technical claims in the answer. All information presented is directly derivable from the provided retrieved context."
+            },
+            "missing_concepts": [],
+            "unsupported_claims": []
+        },
+        "overall_metrics": {
+            "total_latency": 16.409014400094748,
+            "total_cost": 0.0098316,
+            "recall_at_k": 0.4,
+            "precision_at_k": 0.3333333333333333,
+            "hit_rate": 1.0,
+            "mrr": 0.5
+        }
+    }
+]

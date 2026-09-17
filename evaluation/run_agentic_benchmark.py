@@ -32,6 +32,12 @@ from router.query_router import QueryRouter
 from evaluation.agentic_benchmark_runner import AgenticBenchmarkRunner
 from evaluation.result_writer import ResultWriter
 
+from checkpoint.database import create_connection_pool
+from checkpoint.postgres_store import PostgresCheckpointStore
+from checkpoint.resolver import ChromaEvidenceResolver
+
+from evidence.rerank_selector import RerankEvidenceSelector
+
 from app.llm import get_llm
 
 from config import (
@@ -216,11 +222,21 @@ def main() -> None:
         #     top_k=RERANK_TOP_K,
         # )
 
+        checkpoint_pool = create_connection_pool()
+        checkpoint_store = PostgresCheckpointStore(checkpoint_pool)
+
+        evidence_resolver = ChromaEvidenceResolver(
+            doc_store=doc_vector_store,
+            code_store=code_vector_store,
+        )
+
         reranker = CrossEncoderReranker(
             rerank_model="cross-encoder/ettin-reranker-32m-v1",
             top_k=RERANK_TOP_K,
             batch_size=16,
         )
+
+        evidence_selector = RerankEvidenceSelector(reranker)
 
 
         # reranker = ONNXReranker(
@@ -286,6 +302,9 @@ def main() -> None:
             multi_query_strategy=multi_query_strategy,
             code_vector_store=code_vector_store,
             reranker=reranker,
+            evidence_selector=evidence_selector,
+            checkpoint_store=checkpoint_store,
+            evidence_resolver=evidence_resolver,
         )
 
         results = benchmark_runner.run()

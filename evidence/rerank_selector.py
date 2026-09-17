@@ -76,4 +76,11 @@ class RerankEvidenceSelector(EvidenceSelector):
             gaps=gaps
         )
 
+        print(
+        f"[EVIDENCE SELECTOR] "
+        f"candidates={len(unique_evidence)} "
+        f"reranked={len(reranked_evidence)} "
+        f"final={len(final_documents)}"
+        )
+
         return final_documents

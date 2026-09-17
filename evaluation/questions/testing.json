@@ -1,45 +1,45 @@
 [
   {
-    "id": 25,
-    "category": "debugging",
-    "intent": "parallel_tool_interrupt_collection_and_resume",
+    "id": 36,
+    "category": "serialization",
+    "intent": "checkpoint_deserialization_type_reconstruction",
     "difficulty": "very_hard",
-    "question": "Three tools are executed in parallel by ToolNode and each tool calls interrupt(). All three tools reach their interrupt, but the checkpoint state contains fewer interrupts than expected and, after resuming with the captured interrupt map, a resume value can be delivered to the wrong tool. Trace how interrupt exceptions are collected from parallel tasks, how pending interrupts are stored in task/checkpoint state, how interrupt namespaces and IDs are associated with individual tasks, and how the resume map is matched back to the task that originally raised each interrupt.",
+    "question": "A LangGraph application stores custom Python objects in state. The checkpoint is written successfully, but after process restart the restored value is a plain structure rather than the original custom type, causing application code to fail only after resume. Explain the serialization/deserialization path through JsonPlusSerializer, how type metadata is encoded and reconstructed, when pickle or msgpack fallbacks are involved, how serializer configuration controls which Python types can be reconstructed, and why the failure can appear during resumed execution rather than at the moment the checkpoint was created.",
     "queries": [
-      "How does ToolNode execute multiple tool calls concurrently?",
-      "Where does LangGraph collect interrupts raised by parallel tasks?",
-      "How are pending interrupts stored in Pregel task state?",
-      "How does LangGraph map a resume value back to the task that raised an interrupt?",
-      "How do interrupt namespaces distinguish parallel tool executions?",
-      "Why could a resume value be delivered to the wrong parallel tool?"
+      "How does JsonPlusSerializer encode Python types in LangGraph checkpoints?",
+      "How does LangGraph reconstruct custom objects during checkpoint deserialization?",
+      "When does JsonPlusSerializer use msgpack versus pickle or other fallbacks?",
+      "How can checkpoint deserialization produce a different runtime type from the original state?",
+      "What does LANGGRAPH_STRICT_MSGPACK change about checkpoint deserialization?",
+      "Why can a serialization compatibility problem surface only after restarting and resuming a graph?"
     ],
-    "code_snippet": "from langgraph.prebuilt import ToolNode\nfrom langgraph.types import interrupt, Command\nfrom langgraph.checkpoint.memory import InMemorySaver\n\n\ndef create_circle():\n    return interrupt({\"tool\": \"circle\", \"question\": \"approve circle?\"})\n\ndef create_square():\n    return interrupt({\"tool\": \"square\", \"question\": \"approve square?\"})\n\ndef create_triangle():\n    return interrupt({\"tool\": \"triangle\", \"question\": \"approve triangle?\"})\n\n# A ToolNode receives three tool calls in the same graph step.\n# All three tools reach interrupt().\n# The application reads graph.get_state(config).tasks and constructs:\n# Command(resume={interrupt_id: response})",
-    "error": null,
-    "observed_behavior": "Only some parallel interrupts may be exposed or a resume value may be associated with the wrong tool.",
-    "expected_behavior": "Every pending interrupt should remain associated with its originating task and resume value.",
+    "code_snippet": "from dataclasses import dataclass\nfrom typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.checkpoint.memory import InMemorySaver\n\n@dataclass\nclass UserContext:\n    user_id: str\n    role: str\n\nclass State(TypedDict):\n    context: UserContext\n\ndef use_context(state):\n    # Application assumes this is still UserContext.\n    return {\"context\": state[\"context\"]}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"use\", use_context)\nbuilder.add_edge(START, \"use\")\nbuilder.add_edge(\"use\", END)\ngraph = builder.compile(checkpointer=InMemorySaver())\n\nconfig = {\"configurable\": {\"thread_id\": \"types-1\"}}\ngraph.invoke({\"context\": UserContext(\"u1\", \"admin\")}, config)\n# Simulate restart and resume from the persisted checkpoint.",
+    "error": "After restoration, application code observes an unexpected runtime representation for the stored custom object.",
+    "observed_behavior": "The checkpoint can be created successfully but deserialization on a later process can reconstruct a different representation or fail to reconstruct the original type.",
+    "expected_behavior": "The explanation should trace the serializer's type metadata, decoding path, and safety/configuration rules.",
     "expected_files": [
-      "interrupts.mdx",
-      "langgraph/langgraph/types.py",
-      "prebuilt/langgraph/prebuilt/tool_node.py",
-      "prebuilt/langgraph/prebuilt/interrupt.py",
-      "langgraph/langgraph/pregel/_loop.py",
-      "langgraph/langgraph/pregel/_algo.py",
-      "langgraph/langgraph/pregel/_runner.py"
+      "checkpoint/langgraph/checkpoint/serde/base.py",
+      "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+      "checkpoint/langgraph/checkpoint/serde/encrypted.py",
+      "checkpoint/langgraph/checkpoint/base/__init__.py",
+      "persistence.mdx"
     ],
     "concepts": [
-      "ToolNode",
-      "parallel execution",
-      "pending interrupts",
-      "task state",
-      "resume mapping",
-      "interrupt namespace"
+      "checkpoint serialization",
+      "deserialization",
+      "JsonPlusSerializer",
+      "type reconstruction",
+      "msgpack",
+      "pickle fallback",
+      "strict deserialization"
     ],
     "tags": [
-      "ToolNode",
-      "parallel_interrupts",
-      "pending_interrupts",
-      "resume",
-      "task_mapping"
+      "serialization",
+      "deserialization",
+      "JsonPlusSerializer",
+      "custom_types",
+      "msgpack",
+      "checkpoint"
     ]
   }
 ]

@@ -15,7 +15,15 @@ class RAGStage(str, Enum):
     DRAFT_GENERATED = "draft_generated"
     GAPS_PROCESSED = "gaps_processed"
     FINAL_EVIDENCE_READY = "final_evidence_ready"
+    GAP_GENERATION_COMPLETED = "gap_generation_completed"
     COMPLETED = "completed"
+
+class RunStatus(str, Enum):
+    CREATED = "created"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
 
 
 @dataclass

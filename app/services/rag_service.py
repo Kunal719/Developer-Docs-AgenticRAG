@@ -1,31 +1,43 @@
-from retrieval.base import BaseRetriever
-from reranking.base_reranker import BaseReranker
-from langchain_core.language_models.chat_models import BaseChatModel
-
-from ingestion.embedding_model import get_embedding_model
-from pipeline.initialization import initialize_resources
-from pipeline.prepare_retrieval_resources import prepare_retrieval_resources
-from pipeline.build_rag_pipeline import build_rag_pipeline
-
-from ingestion.markdown_parser import load_documents, load_selected_documents
-from ingestion.metadata_extractor import extract_metadata
-
-from ingestion.python_loader import load_python_documents, load_selected_python_documents
-
-from ingestion.chunker import chunk_documents
-from ingestion.code_chunker import chunk_python_documents
-
-from ingestion.code_metadata_extractor import extract_code_metadata
+from uuid import uuid4
 
 from dotenv import load_dotenv
-from collections.abc import Iterator
+from dataclasses import dataclass
 
-from prompt.generation_prompt import generation_prompt
-from utils.document_formatter import format_retrieved_context
+from ingestion.embedding_model import get_embedding_model
+from ingestion.markdown_parser import load_documents, load_selected_documents
+from ingestion.metadata_extractor import extract_metadata
+from ingestion.python_loader import load_python_documents, load_selected_python_documents
+from ingestion.code_chunker import chunk_python_documents
+from ingestion.chunker import chunk_documents
+from ingestion.code_metadata_extractor import extract_code_metadata
 
-from app.schemas.query import Source, QueryResponse
+from pipeline.initialization import initialize_resources
+from pipeline.prepare_retrieval_resources import prepare_retrieval_resources
+from pipeline.agentic_loop import AgenticRAG
+from pipeline.input_normalizer import InputNormalizer
 
-load_dotenv()
+from retrieval.dense_retriever import DenseRetriever
+from retrieval.bm25 import BM25Retriever
+from retrieval.hybrid_retriever import HybridRetriever
+from retrieval.multi_corpus_retriever import MultiCorpusRetriever
+from retrieval.multi_query_retrieval_strategy import MultiQueryRetrievalStrategy
+
+from reranking.cross_encoder import CrossEncoderReranker
+
+from router.query_router import QueryRouter
+
+from checkpoint.database import create_connection_pool
+from checkpoint.postgres_store import PostgresCheckpointStore
+from checkpoint.resolver import ChromaEvidenceResolver
+from checkpoint.models import RunStatus
+
+from evidence.rerank_selector import RerankEvidenceSelector
+
+from app.llm import get_llm
+
+from models.query_input import QueryInput
+from models.generation import GeneratedAnswer
+from checkpoint.models import RunStatus
 
 from config import (
     GITHUB_DOC_REPO_URL,
@@ -44,25 +56,44 @@ from config import (
     CODE_BM25_PATH,
     DOC_INDEX_PATH,
     CODE_INDEX_PATH,
+    MODEL_NAME,
+    MODEL_PROVIDER,
+    MODEL_TEMP,
+    RRF_K,
+    DENSE_TOP_K,
+    MULTI_QUERY_TOP_K,
+    DOC_HYBRID_TOP_K,
+    CODE_HYBRID_TOP_K,
+    RERANK_TOP_K,
+    NORMALIZER_MODEL_NAME,
+    NORMALIZER_MODEL_PROVIDER
 )
+
+load_dotenv()
+
+@dataclass
+class RAGRunResult:
+    run_id: str
+    answer: GeneratedAnswer
+
 
 class RAGService:
     def __init__(self):
-        self._retriever: BaseRetriever | None = None
-        self._reranker: BaseReranker | None = None
-        self._llm: BaseChatModel | None = None
+        self._agentic_rag: AgenticRAG | None = None
+        self._checkpoint_store: PostgresCheckpointStore | None = None
 
     def initialize(self) -> None:
         embedding_model = get_embedding_model()
 
         # Documentation corpus
         doc_repository_status, doc_vector_store = initialize_resources(
-            GITHUB_DOC_REPO_URL, 
-            LOCAL_DOC_REPO_PATH, 
-            DOCUMENTATION_SPARSE_PATHS, 
-            DOC_PERSISTENT_DIRECTORY, 
-            DOC_COLLECTION_NAME, 
-            embedding_model)
+            GITHUB_DOC_REPO_URL,
+            LOCAL_DOC_REPO_PATH,
+            DOCUMENTATION_SPARSE_PATHS,
+            DOC_PERSISTENT_DIRECTORY,
+            DOC_COLLECTION_NAME,
+            embedding_model,
+        )
 
         doc_vector_store, doc_bm25_index = prepare_retrieval_resources(
             repository_status=doc_repository_status,
@@ -74,17 +105,18 @@ class RAGService:
             loader=load_documents,
             selected_loader=load_selected_documents,
             metadata_extractor=extract_metadata,
-            chunker=chunk_documents
+            chunker=chunk_documents,
         )
 
         # Implementation corpus
         code_repository_status, code_vector_store = initialize_resources(
-            GITHUB_CODE_REPO_URL, 
-            LOCAL_CODE_REPO_PATH, 
-            IMPLEMENTATION_SPARSE_PATHS, 
-            CODE_PERSISTENT_DIRECTORY, 
-            CODE_COLLECTION_NAME, 
-            embedding_model)
+            GITHUB_CODE_REPO_URL,
+            LOCAL_CODE_REPO_PATH,
+            IMPLEMENTATION_SPARSE_PATHS,
+            CODE_PERSISTENT_DIRECTORY,
+            CODE_COLLECTION_NAME,
+            embedding_model,
+        )
 
         code_vector_store, code_bm25_index = prepare_retrieval_resources(
             repository_status=code_repository_status,
@@ -96,116 +128,192 @@ class RAGService:
             loader=load_python_documents,
             selected_loader=load_selected_python_documents,
             metadata_extractor=extract_code_metadata,
-            chunker=chunk_python_documents
+            chunker=chunk_python_documents,
         )
 
-        # Initialize runtime objects
-        _, self._retriever, self._reranker, self._llm = build_rag_pipeline(
-            doc_vector_store=doc_vector_store,
-            doc_bm25_index=doc_bm25_index,
-            code_vector_store=code_vector_store,
-            code_bm25_index=code_bm25_index
+        # ---------------------------------------------------------
+        # Runtime retrievers
+        # ---------------------------------------------------------
+        doc_dense_retriever = DenseRetriever(
+            vector_store=doc_vector_store,
+            top_k=DENSE_TOP_K,
         )
 
-    def stream(self, question: str) -> Iterator[tuple[str, str | list[Source]]]:
+        doc_bm25_retriever = BM25Retriever(
+            bm25_index=doc_bm25_index,
+        )
 
-        if self._retriever is None or self._reranker is None or self._llm is None:
+        doc_hybrid_retriever = HybridRetriever(
+            bm25_retriever=doc_bm25_retriever,
+            dense_retriever=doc_dense_retriever,
+            top_k=DOC_HYBRID_TOP_K,
+            rrf_k=RRF_K,
+        )
+
+        code_dense_retriever = DenseRetriever(
+            vector_store=code_vector_store,
+            top_k=DENSE_TOP_K,
+        )
+
+        code_bm25_retriever = BM25Retriever(
+            bm25_index=code_bm25_index,
+        )
+
+        code_hybrid_retriever = HybridRetriever(
+            bm25_retriever=code_bm25_retriever,
+            dense_retriever=code_dense_retriever,
+            top_k=CODE_HYBRID_TOP_K,
+            rrf_k=RRF_K,
+        )
+
+        multi_corpus_retriever = MultiCorpusRetriever(
+            retrievers=[
+                doc_hybrid_retriever,
+                code_hybrid_retriever,
+            ]
+        )
+
+        multi_query_strategy = MultiQueryRetrievalStrategy(
+            top_k=MULTI_QUERY_TOP_K,
+            rrf_k=RRF_K,
+        )
+
+        reranker = CrossEncoderReranker(
+            rerank_model="cross-encoder/ettin-reranker-32m-v1",
+            top_k=RERANK_TOP_K,
+            batch_size=16,
+        )
+
+        evidence_selector = RerankEvidenceSelector(reranker)
+
+        # Checkpoint persistence
+        checkpoint_pool = create_connection_pool()
+        checkpoint_store = PostgresCheckpointStore(checkpoint_pool)
+
+        evidence_resolver = ChromaEvidenceResolver(
+            doc_store=doc_vector_store,
+            code_store=code_vector_store,
+        )
+
+        # LLMs
+        router_llm = get_llm(
+            model_name=MODEL_NAME,
+            model_provider=MODEL_PROVIDER,
+            temperature=MODEL_TEMP,
+            max_tokens=3000,
+        )
+
+        # Normalizer LLM
+        input_normalizer_llm = get_llm(
+            model_name=NORMALIZER_MODEL_NAME,
+            model_provider=NORMALIZER_MODEL_PROVIDER,
+            temperature=0
+        )
+
+        self._input_normalizer = InputNormalizer(input_normalizer_llm)
+
+        self._generation_llm = get_llm(
+            model_name=MODEL_NAME,
+            model_provider=MODEL_PROVIDER,
+            temperature=MODEL_TEMP
+        )
+
+        # Initialize Agentic RAG
+        self._router_llm = router_llm
+        self._doc_hybrid_retriever = doc_hybrid_retriever
+        self._code_hybrid_retriever = code_hybrid_retriever
+        self._multi_corpus_retriever = multi_corpus_retriever
+        self._multi_query_strategy = multi_query_strategy
+        self._reranker = reranker
+        self._code_vector_store = code_vector_store
+        self._evidence_selector = evidence_selector
+        self._checkpoint_store = checkpoint_store
+        self._evidence_resolver = evidence_resolver
+
+        self._agentic_rag = AgenticRAG(
+            query_router=QueryRouter(self._router_llm),
+            generation_llm=self._generation_llm,
+            doc_hybrid_retriever=self._doc_hybrid_retriever,
+            code_hybrid_retriever=self._code_hybrid_retriever,
+            multi_corpus_retriever=self._multi_corpus_retriever,
+            multi_query_strategy=self._multi_query_strategy,
+            reranker=self._reranker,
+            code_vector_store=self._code_vector_store,
+            evidence_selector=self._evidence_selector,
+            checkpoint_store=self._checkpoint_store,
+            evidence_resolver=self._evidence_resolver,
+        )
+
+    def _require_initialized(self) -> AgenticRAG:
+        if self._agentic_rag is None:
             raise RuntimeError("RAG service is not initialized")
 
-        yield ("status", "🔎 Searching the docs...")
-        documents = self._retriever.retrieve(question)
+        return self._agentic_rag
 
-        yield ("status", "🎯 Hunting down the most relevant sources...")
-        reranked_documents = self._reranker.rerank(question, documents)
+    def run(self, question: str) -> RAGRunResult:
+        agentic_rag = self._require_initialized()
 
+        run_id = uuid4().hex
+        query_input = self._input_normalizer.normalize(question)
 
-        sources = []
-        seen_sources = set()
-        for rank, doc in enumerate(reranked_documents, start=1):
-            source = doc.metadata.get("source", "unknown")
-
-            if source in seen_sources:
-                rank -= 1
-                continue
-
-            seen_sources.add(source)
-
-            sources.append(
-                Source(
-                    source=source, 
-                    corpus=doc.metadata.get("corpus","unknown"), 
-                    rank=len(sources) + 1
-                )
+        try:
+            answer = agentic_rag.run(
+                query_input=query_input,
+                run_id=run_id,
             )
 
-        # Format context
-        context = format_retrieved_context(reranked_documents)
+        except Exception as e:
+            try:
+                self._checkpoint_store.update_status(run_id, RunStatus.FAILED, str(e))
+            except KeyError:
+                # If the checkpoint is not found, this is a new run. We can ignore this.
+                pass
 
-        # Build prompt using question and context
-        prompt = generation_prompt.format(question=question, context=context)
+            raise
 
-        # Stream the response
-        yield ("status", "🤓 Making sure the answer isn't hallucinating...")
-        for chunk in self._llm.stream(prompt):
-            if chunk.content:
-                yield("token", chunk.content)
+        return RAGRunResult(run_id=run_id, answer=answer)
 
-        yield("sources", sources)
+    def resume(self, run_id: str) -> RAGRunResult:
+        agentic_rag = self._require_initialized()
 
-    def query(self, question: str) -> QueryResponse:
-    
-            if self._retriever is None or self._reranker is None or self._llm is None:
-                raise RuntimeError("RAG service is not initialized")
-    
-            documents = self._retriever.retrieve(question)
-            reranked_documents = self._reranker.rerank(question, documents)
-    
-            sources = []
-            seen_sources = set()
-            for rank, doc in enumerate(reranked_documents, start=1):
-                source = doc.metadata.get("source", "unknown")
-    
-                if source in seen_sources:
-                    rank -= 1
-                    continue
-    
-                seen_sources.add(source)
-    
-                sources.append(
-                    Source(
-                        source=source, 
-                        corpus=doc.metadata.get("corpus","unknown"), 
-                        rank=len(sources) + 1
-                    )
-                )
-    
-            # Format context
-            context = format_retrieved_context(reranked_documents)
-    
-            # Build prompt using question and context
-            prompt = generation_prompt.format(question=question, context=context)
-    
-            # Get full response
-            response = self._llm.invoke(prompt)
+        checkpoint_store = self._checkpoint_store
+        if checkpoint_store is None:
+            raise RuntimeError("Checkpoint store is not initialized")
 
-            return QueryResponse(
-                answer = response.content,
-                sources = sources
-            )
-    
+        checkpoint = checkpoint_store.load(run_id)
+
+        answer = agentic_rag.run(
+            query_input=checkpoint.query_input,
+            run_id=run_id,
+            resume=True,
+        )
+
+        return RAGRunResult(run_id=run_id, answer=answer)
+
+    def get_run_status(self, run_id: str) -> RunStatus:
+        checkpoint_store = self._checkpoint_store
+
+        if checkpoint_store is None:
+            raise RuntimeError("Checkpoint store is not initialized")
+
+        return checkpoint_store.get_status(run_id)
+
+    def list_runs(self) -> list[dict]:
+        checkpoint_store = self._checkpoint_store
+
+        if checkpoint_store is None:
+            raise RuntimeError("Checkpoint store is not initialized")
+
+        return checkpoint_store.list_runs()
+
+
 if __name__ == "__main__":
     service = RAGService()
     service.initialize()
 
-    for event_type, data in service.stream(
+    run_id, answer = service.run(
         "How do I create a checkpoint?"
-    ):
-        if event_type == "sources":
-            print("\n\nSources:")
-            for source in data:
-                print(f"{source.rank}. {source.source} ({source.corpus})")
+    )
 
-        elif event_type == "token":
-            print(data, end="", flush=True)
-
-    print()
+    print(f"Run ID: {run_id}")
+    print(answer)

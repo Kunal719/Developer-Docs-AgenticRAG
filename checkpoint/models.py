@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field
+from enum import Enum
 
 from models.generation import GeneratedAnswer, RetrievalGap
 from models.query_input import QueryInput
@@ -14,6 +15,13 @@ class EvidenceItemCheckpoint(BaseModel):
     source: str
     query: str
     gap: RetrievalGap | None = None
+
+class RunStatus(str, Enum):
+    CREATED = "created"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
 
 class RAGCheckpoint(BaseModel):
     """

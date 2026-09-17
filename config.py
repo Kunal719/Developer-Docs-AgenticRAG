@@ -51,6 +51,9 @@ MODEL_NAME = "gpt-5.6-luna"
 MODEL_PROVIDER = "openai"
 MODEL_TEMP = 0.1
 
+NORMALIZER_MODEL_NAME="gpt-4o-mini"
+NORMALIZER_MODEL_PROVIDER="openai"
+
 JUDGE_MODEL_NAME = "gemini-2.5-flash"
 JUDGE_MODEL_PROVIDER = "google_genai"
 JUDGE_TEMP = 0.0

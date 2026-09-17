@@ -16,8 +16,6 @@ def _build_entity_where(filters: MetadataFilters) -> dict | None:
         or_clauses.append({"function_name": {"$in": filters.function_names}})
     if filters.class_names:
         or_clauses.append({"class_name": {"$in": filters.class_names}})
-    if filters.module_names:
-        or_clauses.append({"module_name": {"$in": filters.module_names}})
 
     if not or_clauses:
         return None
@@ -51,4 +49,4 @@ def has_entity_filter(filters: MetadataFilters | None) -> bool:
     if filters is None:
         return False
 
-    return bool(filters.function_names or filters.class_names or filters.module_names)
+    return bool(filters.function_names or filters.class_names)

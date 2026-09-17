@@ -16,6 +16,11 @@ from router.query_router import QueryRouter
 
 from reranking.base_reranker import BaseReranker
 
+from evidence.base_selector import EvidenceSelector
+
+from checkpoint.store import CheckpointStore
+from checkpoint.resolver import EvidenceResolver
+
 from models.query_input import to_query_input
 
 from pipeline.agentic_loop import AgenticRAG
@@ -53,7 +58,10 @@ class AgenticBenchmarkRunner:
             multi_corpus_retriever: MultiCorpusRetriever,
             multi_query_strategy: MultiQueryRetrievalStrategy,
             code_vector_store: Chroma,
-            reranker: BaseReranker
+            reranker: BaseReranker,
+            evidence_selector: EvidenceSelector,
+            checkpoint_store: CheckpointStore,
+            evidence_resolver: EvidenceResolver,
             ):
         self._questions_path = questions_path
         self._router_llm = router_llm
@@ -65,6 +73,9 @@ class AgenticBenchmarkRunner:
         self._multi_query_strategy = multi_query_strategy
         self._code_vector_store = code_vector_store
         self._reranker = reranker
+        self._evidence_selector = evidence_selector
+        self._checkpoint_store = checkpoint_store
+        self._evidence_resolver = evidence_resolver
 
     def run(self) -> list[AgenticEvaluationResult]:
 
@@ -87,7 +98,10 @@ class AgenticBenchmarkRunner:
             multi_corpus_retriever=self._multi_corpus_retriever,
             multi_query_strategy=self._multi_query_strategy,
             reranker=self._reranker,
-            code_vector_store=self._code_vector_store
+            code_vector_store=self._code_vector_store,
+            evidence_selector=self._evidence_selector,
+            checkpoint_store=self._checkpoint_store,
+            evidence_resolver=self._evidence_resolver
         )
 
         # Inititate the judge

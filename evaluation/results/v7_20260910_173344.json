@@ -1,0 +1,2138 @@
+[
+    {
+        "question": {
+            "question": "A LangGraph application stores custom Python objects in state. The checkpoint is written successfully, but after process restart the restored value is a plain structure rather than the original custom type, causing application code to fail only after resume. Explain the serialization/deserialization path through JsonPlusSerializer, how type metadata is encoded and reconstructed, when pickle or msgpack fallbacks are involved, how serializer configuration controls which Python types can be reconstructed, and why the failure can appear during resumed execution rather than at the moment the checkpoint was created.",
+            "code_snippet": "from dataclasses import dataclass\nfrom typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\nfrom langgraph.checkpoint.memory import InMemorySaver\n\n@dataclass\nclass UserContext:\n    user_id: str\n    role: str\n\nclass State(TypedDict):\n    context: UserContext\n\ndef use_context(state):\n    # Application assumes this is still UserContext.\n    return {\"context\": state[\"context\"]}\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"use\", use_context)\nbuilder.add_edge(START, \"use\")\nbuilder.add_edge(\"use\", END)\ngraph = builder.compile(checkpointer=InMemorySaver())\n\nconfig = {\"configurable\": {\"thread_id\": \"types-1\"}}\ngraph.invoke({\"context\": UserContext(\"u1\", \"admin\")}, config)\n# Simulate restart and resume from the persisted checkpoint.",
+            "error": "After restoration, application code observes an unexpected runtime representation for the stored custom object.",
+            "logs": null,
+            "observed_behavior": "The checkpoint can be created successfully but deserialization on a later process can reconstruct a different representation or fail to reconstruct the original type.",
+            "expected_behavior": "The explanation should trace the serializer's type metadata, decoding path, and safety/configuration rules.",
+            "id": 36,
+            "category": "serialization",
+            "intent": "checkpoint_deserialization_type_reconstruction",
+            "difficulty": "very_hard",
+            "expected_files": [
+                "checkpoint/langgraph/checkpoint/serde/base.py",
+                "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                "checkpoint/langgraph/checkpoint/serde/encrypted.py",
+                "checkpoint/langgraph/checkpoint/base/__init__.py",
+                "persistence.mdx"
+            ],
+            "concepts": [
+                "checkpoint serialization",
+                "deserialization",
+                "JsonPlusSerializer",
+                "type reconstruction",
+                "msgpack",
+                "pickle fallback",
+                "strict deserialization"
+            ],
+            "tags": [
+                "serialization",
+                "deserialization",
+                "JsonPlusSerializer",
+                "custom_types",
+                "msgpack",
+                "checkpoint"
+            ],
+            "evidence": null,
+            "queries": [
+                "How does JsonPlusSerializer encode Python types in LangGraph checkpoints?",
+                "How does LangGraph reconstruct custom objects during checkpoint deserialization?",
+                "When does JsonPlusSerializer use msgpack versus pickle or other fallbacks?",
+                "How can checkpoint deserialization produce a different runtime type from the original state?",
+                "What does LANGGRAPH_STRICT_MSGPACK change about checkpoint deserialization?",
+                "Why can a serialization compatibility problem surface only after restarting and resuming a graph?"
+            ]
+        },
+        "final_answer": "## Serialization and restoration path\n\n`StateGraph` accepts the `UserContext` value as part of the state, but the retrieved code does not show that the `TypedDict` annotation itself controls serialization or guarantees reconstruction of arbitrary Python classes. Reconstruction is controlled by the serializer attached to the checkpointer.\n\n### 1. Checkpoint writing\n\n`JsonPlusSerializer.dumps_typed()` assigns an outer serialization type:\n\n- `None` becomes `(\"null\", b\"\")`.\n- `bytes` and `bytearray` use dedicated `\"bytes\"` and `\"bytearray\"` representations.\n- Other values are passed to `_msgpack_enc()`, which calls `ormsgpack.packb(..., default=_msgpack_default, ...)`.\n- If msgpack raises `ormsgpack.MsgpackEncodeError`, pickle is used only when `pickle_fallback=True`; otherwise the encoding error is raised.\n\nThe retrieved context does not include `_msgpack_default`, so it does not establish the exact msgpack representation selected for this particular dataclass. It does establish that supported custom objects may be encoded using msgpack constructor extensions containing the object's module, class name, and constructor data.\n\n### 2. Msgpack restoration and type metadata\n\nFor msgpack data, `loads_typed()` calls:\n\n```python\normsgpack.unpackb(\n    data_,\n    ext_hook=self._unpack_ext_hook,\n    option=ormsgpack.OPT_NON_STR_KEYS,\n)\n```\n\nThe extension hook processes constructor metadata in several forms:\n\n- single argument: module, class name, and one argument;\n- positional arguments: module, class name, and an argument sequence;\n- keyword arguments: module, class name, and a keyword dictionary.\n\nIf the type is allowed, the hook imports the recorded module, obtains the recorded class, and invokes it with the recorded arguments. Conceptually, metadata for `some_module.UserContext` with positional values would result in behavior equivalent to:\n\n```python\nUserContext(*args)\n```\n\nFor keyword metadata, the equivalent operation is `UserContext(**kwargs)`.\n\nIf the type is not allowed, the hook does not reconstruct the class. For constructor extensions it returns the encoded argument payload, such as the positional argument list or keyword dictionary. That produces a plain structure rather than a `UserContext`, which explains why application code can later observe an unexpected representation.\n\nImport failures, constructor failures, and other extension-hook exceptions are caught. Depending on the extension type, the hook returns `None` or a raw payload. Thus, successful checkpoint encoding does not prove that restoration will recreate the original class.\n\n### 3. Legacy JSON restoration\n\nFor a value stored with the outer type `\"json\"`, `loads_typed()` calls `json.loads(..., object_hook=self._reviver)`.\n\n`_reviver()` recognizes constructor envelopes shaped like:\n\n```python\n{\n    \"lc\": 2,\n    \"type\": \"constructor\",\n    \"id\": [\"some_module\", \"UserContext\"],\n    \"args\": [...],\n    \"kwargs\": {...}\n}\n```\n\nIt then calls `_revive_lc2()`. That method:\n\n1. checks whether the recorded module and symbol are allowed;\n2. imports the module;\n3. obtains the named class;\n4. calls the class with the recorded positional or keyword data.\n\nThe `method` field is intentionally ignored. Revival is restricted to the default constructor rather than dispatching an attacker-controlled method name.\n\nIf JSON revival is refused or the constructor cannot be completed, the implementation may leave the value to `LC_REVIVER(value)` or return `None` after logging a warning. Therefore, JSON constructor metadata is also not an unconditional guarantee that the original object will be restored.\n\n### 4. Pickle fallback\n\n`pickle_fallback` is an encoding fallback, not a setting that forces all objects to use pickle.\n\nWhen msgpack encoding fails:\n\n```python\nJsonPlusSerializer(pickle_fallback=True)\n```\n\ncauses `dumps_typed()` to return:\n\n```python\n(\"pickle\", pickle.dumps(obj))\n```\n\nThe checkpointer documentation gives unsupported objects such as Pandas dataframes as an example use case.\n\nOn restoration, `loads_typed()` handles this representation only when both conditions hold:\n\n```python\nself.pickle_fallback and type_ == \"pickle\"\n```\n\nIt then calls `pickle.loads(data_)`. If pickle fallback is disabled for a `\"pickle\"` payload, `loads_typed()` raises `NotImplementedError` for the unknown or disabled serialization type. The retrieved context does not show additional pickle safety checks; therefore pickle should not be treated as a general safe reconstruction mechanism.\n\n### 5. Serializer configuration and safety rules\n\nJSON and msgpack have separate configuration controls.\n\n#### JSON: `allowed_json_modules`\n\nThe JSON path requires an exact `(module, symbol)` allowlist entry for non-safe constructor types. The options are:\n\n- no allowlist: reject the constructor envelope with `InvalidModuleError`;\n- `allowed_json_modules=[(\"my_module\", \"UserContext\")]`: allow that exact symbol;\n- `allowed_json_modules=True`: allow all such symbols, which the implementation labels dangerous.\n\nPrefix allowlists are not supported. Types in `SAFE_MSGPACK_TYPES` bypass this JSON gate for backwards compatibility with older JSON checkpoints.\n\n#### Msgpack: `allowed_msgpack_modules`\n\nThe msgpack extension hook applies these rules:\n\n- safe msgpack types are always allowed;\n- an explicit allowlist permits only the listed module/name pairs;\n- `True` allows unregistered types but emits warnings;\n- `None` blocks unregistered types.\n\nThe constructor selects the default based on strict-mode configuration. With strict msgpack enabled, the default is the safe-type-only mode. Otherwise, the default is permissive and allows unregistered types with warnings. The serializer also provides `with_msgpack_allowlist()` to create a serializer with additional allowed module/type pairs.\n\nFor a custom class such as `UserContext`, reconstruction therefore depends on all of the following being compatible between the writer and reader:\n\n- the class being encoded with reconstructible constructor metadata;\n- the module and class name remaining importable and unchanged;\n- the reader's allowlist permitting that exact symbol;\n- the constructor accepting the serialized arguments.\n\n### 6. Why the failure appears after resume\n\nCheckpoint creation and checkpoint restoration occur at different times:\n\n1. Graph execution holds a `UserContext` instance in the in-memory state.\n2. The checkpointer serializes the checkpoint. Encoding can succeed because msgpack can store constructor metadata, even though reconstruction has not yet occurred.\n3. A later `get_state()` or resumed invocation reads the saved checkpoint using `checkpointer.get_tuple(config)`.\n4. Pregel reconstructs channels from the saved checkpoint through `achannels_from_checkpoint(...)`.\n5. The restored channel values are read into the state snapshot and supplied to subsequent graph execution.\n6. Application code then assumes `state[\"context\"]` is still a `UserContext`.\n\nThe write path only needs to encode the value. The reconstruction decision—including import availability, constructor success, and allowlist checks—occurs on the later load path. Consequently, a checkpoint may be written successfully while the resumed state contains a dictionary, argument list, `None`, or another fallback representation.\n\nFor the supplied example, the exact cause cannot be narrowed to one branch from the retrieved context because `_msgpack_default`, the function that selects the concrete msgpack extension representation for `UserContext`, is not included. The supported explanation is that the value was either encoded with constructor metadata and later blocked or failed during reconstruction, or was loaded through a representation that does not reconstruct the class. The `State` `TypedDict` annotation does not, according to the retrieved material, override those serializer rules.\n\n`InMemorySaver` is shown in the example, but the retrieved context does not establish how its contents survive an actual process boundary. The described post-restart behavior applies when checkpoint bytes are genuinely persisted and later read using a compatible serializer configuration.",
+        "experiment_metadata": {
+            "version": "v7",
+            "timestamp": "2026-09-10T17:33:44.353638",
+            "embedding_model": "text-embedding-3-small",
+            "llm_provider": "openai",
+            "llm": "gpt-5.6-luna",
+            "chunk_size": 1200,
+            "chunk_overlap": 200,
+            "dense_top_k": 10,
+            "bm25_top_k": 10,
+            "hybrid_top_k": 16,
+            "rrf_k": 60,
+            "reranker_top_k": 13,
+            "reranker_name": "BAAI/bge-reranker-base",
+            "judge_model": "gemini-2.5-flash",
+            "judge_llm_provider": "google_genai",
+            "router_llm": "gpt-5.6-luna",
+            "router_llm_provider": "openai"
+        },
+        "router_metrics": {
+            "name": "Query Router",
+            "prompt_tokens": 1892,
+            "completion_tokens": 366,
+            "total_tokens": 2258,
+            "estimated_cost": 0.0008176,
+            "router_latency": 6.117663400014862
+        },
+        "retrieval_plan": {
+            "retrieval_mode": "combined_query",
+            "reasoning": "This is a multi-concept but cohesive serializer question: the serialization path, type metadata, fallback formats, configuration/safety rules, and delayed failure all concern JsonPlusSerializer and should be retrieved together. The named class also warrants exact-match retrieval.",
+            "sub_queries": [
+                "how JsonPlusSerializer encodes and reconstructs Python type metadata",
+                "when JsonPlusSerializer uses pickle or msgpack serialization fallbacks",
+                "how serializer configuration controls which Python types can be reconstructed safely",
+                "why checkpoint deserialization failures can appear only during resumed execution"
+            ],
+            "combined_query": "A LangGraph application stores custom Python objects in state, but after process restart checkpoint restoration produces a plain structure or fails to reconstruct the original type. Explain the JsonPlusSerializer serialization and deserialization path, how type metadata is encoded and reconstructed, when pickle or msgpack fallbacks are involved, how serializer configuration controls which Python types can be reconstructed, and why the failure can appear during resumed execution rather than checkpoint creation. Include JsonPlusSerializer type metadata, decoding behavior, fallback formats, safety and configuration rules, checkpoint persistence, and delayed deserialization during resume.",
+            "metadata_filters": {
+                "corpus": null,
+                "module_names": null,
+                "class_names": [
+                    "JsonPlusSerializer"
+                ],
+                "function_names": null,
+                "category": null
+            }
+        },
+        "pipeline_stages": [
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.28119500004686415,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "09873f93436f3ba32d9e92fc670093c7392ddc3a4c3a0b744af2dcca4c465add",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9a256fd813ee4caeabdaced608bbdd59e33856f4005d98c249652497bc7f4727",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3cb5bdb639288a2b52da09387ca01f995096dbf8a38269bbbc900636ed942980",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a668ea8b1e6479342264e26ba9a2f84e00508939ad8fe1778203fb0ad7b24d2f",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "32f51194ea3cdcebfc0b42386c35fe276379f7581cb3064884bf6cc36629c7ca",
+                        "source": "stores.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9f56fe0a097c90c799cdd8d20d4c37cb3e94656a45c3ef25ffe50ffeaf83d382",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a6417b3b5993d93bd03d7152ca2fb8f078a5aacc801a4720358878508c2c57b5",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9c0c6a9b973b364e42b5be1269603e56b11659918731f2b7085a2b0123b3e7d8",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6106a83620b39f33019e062353c8ae708910da7256284d48bdf1f45aee9de9c2",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "70709e8b048fa0c8427434f6a8a22971aafe052792d8e8503d8423ba93009fe8",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.27659870008938015,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f273a0bcdcf7e54a09a18112e7a22e21107db317b485adbbba32087e7977b6e4",
+                        "source": "langgraph/langgraph/graph/message.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "54851effaa88959930e4cfe7e648a16cc7ecb3b41d38658c8524ff9b3d33acf8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1931fa957bf60822d91db11498de894579bc0dad1aa1b4b424db70ed2613e839",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "24fbb69ade57e17a1f7b8e49baa2d9b37955095d37c873ff87ecb16895795aea",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "576df20178872943cea965e3fef0e263c54e1bcd3c938858a336158eac2da6df",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "e6fb76afabb58df94ff4927280b7a2dbacfe68c7f0ccd7c70572c2090321afa8",
+                        "source": "langgraph/langgraph/pregel/_call.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 1.6385005000047386,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "4f2ad0de5a4fb747987881f1ab873beb46a62d0a46d605dbad9beb3ff35484c9",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4e81f8de5adf277ec5ef760d4408cab9c9220fab64202e4529fb50eeb20c8527",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8c94835732219bb2e35383de2cdb734405129450c5147adae32b8472617062c1",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b4fe1e7743717bb0eeb17af5342aed68ffb637d082c3115b12effdab2c71225c",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "f0e92e4a1bd835fc349cfb5daf8a00d51c176bbaa387a005bc7b19c4c5aa62e7",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d091e0c264c6cb1a15912406aa85e00ccc21c8ec73ad6fa3cd62c261a8aabcea",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "7f91e8e8ef3b783434add3e9dd0bf5f6e043592ee42c990e858afdce05eede9b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "55d1d1ba2b23dd5b3ef4d9f67f896d46584b1b94db50b393875c6b1e8a31b43a",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "c82bf9a564e6f3261e0de531df25488aadba6c5a4b311a695ab27cf50de08b49",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1ab23e05c3c34de7ee0038bdf3eb9ff73ee3c7ec18e2ec0de480d863d102cda8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.920014180243015e-05,
+                "top_k": 16,
+                "documents": [
+                    {
+                        "chunk_id": "4f2ad0de5a4fb747987881f1ab873beb46a62d0a46d605dbad9beb3ff35484c9",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "4e81f8de5adf277ec5ef760d4408cab9c9220fab64202e4529fb50eeb20c8527",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "8c94835732219bb2e35383de2cdb734405129450c5147adae32b8472617062c1",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "b4fe1e7743717bb0eeb17af5342aed68ffb637d082c3115b12effdab2c71225c",
+                        "source": "langgraph/langgraph/_internal/_replay.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "f273a0bcdcf7e54a09a18112e7a22e21107db317b485adbbba32087e7977b6e4",
+                        "source": "langgraph/langgraph/graph/message.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "f0e92e4a1bd835fc349cfb5daf8a00d51c176bbaa387a005bc7b19c4c5aa62e7",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "d091e0c264c6cb1a15912406aa85e00ccc21c8ec73ad6fa3cd62c261a8aabcea",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "54851effaa88959930e4cfe7e648a16cc7ecb3b41d38658c8524ff9b3d33acf8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "7f91e8e8ef3b783434add3e9dd0bf5f6e043592ee42c990e858afdce05eede9b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 13
+                    },
+                    {
+                        "chunk_id": "1931fa957bf60822d91db11498de894579bc0dad1aa1b4b424db70ed2613e839",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 14
+                    },
+                    {
+                        "chunk_id": "55d1d1ba2b23dd5b3ef4d9f67f896d46584b1b94db50b393875c6b1e8a31b43a",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 15
+                    },
+                    {
+                        "chunk_id": "24fbb69ade57e17a1f7b8e49baa2d9b37955095d37c873ff87ecb16895795aea",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.014705882352941176,
+                        "reranker_score": null,
+                        "rank": 16
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 2.628638699883595,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "9765cf2039f0a1607d6de02045a321be639b6b7a9d479e7543b3f519ade110f8",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6a348d3f99b9afd429412304ea0fcb26607f61767d3a847217accd86f4718046",
+                        "source": "use-subgraphs.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "9a256fd813ee4caeabdaced608bbdd59e33856f4005d98c249652497bc7f4727",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "01a92b88e02d1d601dce73d98faf05b789009bfc8c9f333a60faf81c77e22200",
+                        "source": "add-memory.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "ee01a077f6af1693dc2fda971f2b682962a2ef68774586b853e46a608eccb228",
+                        "source": "fault-tolerance.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "1da30f43f0bb47d9405dc7ee7768e6be65f5b632e9071b3a6be606f9440fdc22",
+                        "source": "stores.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "57fe00a0dcc5e4cc83852340798b76570646aeec4a05e89e9725410e371fe7eb",
+                        "source": "add-memory.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "140daae346c33c9221b5291a401b33d795fecbfa5cd945bc8bdcc3ec014353e8",
+                        "source": "persistence.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b258855b1d66c50713747cf48cdf45d227e36adbcca6819bd2523e7da5069824",
+                        "source": "use-subgraphs.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3cb5bdb639288a2b52da09387ca01f995096dbf8a38269bbbc900636ed942980",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 0.00012209988199174404,
+                "top_k": 12,
+                "documents": [
+                    {
+                        "chunk_id": "9a256fd813ee4caeabdaced608bbdd59e33856f4005d98c249652497bc7f4727",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.03200204813108039,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "3cb5bdb639288a2b52da09387ca01f995096dbf8a38269bbbc900636ed942980",
+                        "source": "use-graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.030158730158730156,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "9765cf2039f0a1607d6de02045a321be639b6b7a9d479e7543b3f519ade110f8",
+                        "source": "use-time-travel.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "09873f93436f3ba32d9e92fc670093c7392ddc3a4c3a0b744af2dcca4c465add",
+                        "source": "graph-api.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "6a348d3f99b9afd429412304ea0fcb26607f61767d3a847217accd86f4718046",
+                        "source": "use-subgraphs.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "01a92b88e02d1d601dce73d98faf05b789009bfc8c9f333a60faf81c77e22200",
+                        "source": "add-memory.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "a668ea8b1e6479342264e26ba9a2f84e00508939ad8fe1778203fb0ad7b24d2f",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "ee01a077f6af1693dc2fda971f2b682962a2ef68774586b853e46a608eccb228",
+                        "source": "fault-tolerance.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "32f51194ea3cdcebfc0b42386c35fe276379f7581cb3064884bf6cc36629c7ca",
+                        "source": "stores.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "1da30f43f0bb47d9405dc7ee7768e6be65f5b632e9071b3a6be606f9440fdc22",
+                        "source": "stores.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "9f56fe0a097c90c799cdd8d20d4c37cb3e94656a45c3ef25ffe50ffeaf83d382",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.015151515151515152,
+                        "reranker_score": null,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "57fe00a0dcc5e4cc83852340798b76570646aeec4a05e89e9725410e371fe7eb",
+                        "source": "add-memory.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": 0.014925373134328358,
+                        "reranker_score": null,
+                        "rank": 12
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 4.263232599943876,
+                "top_k": 13,
+                "documents": [
+                    {
+                        "chunk_id": "d091e0c264c6cb1a15912406aa85e00ccc21c8ec73ad6fa3cd62c261a8aabcea",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 3.1007142066955566,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 2.3330347537994385,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "54851effaa88959930e4cfe7e648a16cc7ecb3b41d38658c8524ff9b3d33acf8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.786038875579834,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "9f56fe0a097c90c799cdd8d20d4c37cb3e94656a45c3ef25ffe50ffeaf83d382",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 1.72213613986969,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "6a348d3f99b9afd429412304ea0fcb26607f61767d3a847217accd86f4718046",
+                        "source": "use-subgraphs.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 1.6375430822372437,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "4f2ad0de5a4fb747987881f1ab873beb46a62d0a46d605dbad9beb3ff35484c9",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.4382895231246948,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "5e2d2177a4b7cf6c0acc1a51df1dda9b7f6a08b5b13fb5d0cdde6bb495e253ea",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.760683000087738,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.7561267018318176,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "b0b55946319694300dbb210415a681cf1dd2ebc98aef89365c845ec586d1bb95",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.6175810098648071,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "a668ea8b1e6479342264e26ba9a2f84e00508939ad8fe1778203fb0ad7b24d2f",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 0.5872431993484497,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "7f91e8e8ef3b783434add3e9dd0bf5f6e043592ee42c990e858afdce05eede9b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.5752871632575989,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.5583716034889221,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.5167061686515808,
+                        "rank": 13
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.006935199955478311,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "c2b9a3e512848cdca37ac6de7f4eca3fd8580eeef45a78f22bf61b962662832c",
+                        "source": "checkpoint/langgraph/checkpoint/serde/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "a15471f2f3d7ed47823d25be6ee3867d8b7ddb25fb2cdb636c7542b51a7ef529",
+                        "source": "checkpoint/langgraph/checkpoint/serde/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "787d4c3e10f9fa5078be9466b53f279ee788f9309ed184dc66cfd92ddd1038b4",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6723ff48f092dc932ebc819f88650d5928f56f2f815e2d79a1a5e9955abef112",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b0b55946319694300dbb210415a681cf1dd2ebc98aef89365c845ec586d1bb95",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2a71daef81185b542f0b7c3cbcd31cdc3ecab0155cc68cbb78560c6c105dd621",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "122d427f10a11db3174ac681c4827e7b4bdc4e423d4538c4d1d07f58b2c80c7d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5e2d2177a4b7cf6c0acc1a51df1dda9b7f6a08b5b13fb5d0cdde6bb495e253ea",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "df0dfd828b078dfdf41569bd05baa7704f1eca5ba9f9d8ace692fb3d189a1eee",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 0.7892504001501948,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "b0b55946319694300dbb210415a681cf1dd2ebc98aef89365c845ec586d1bb95",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "787d4c3e10f9fa5078be9466b53f279ee788f9309ed184dc66cfd92ddd1038b4",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "254b0cd7c1b6f94b424326d26666ea3abe6f880f2678f91d8ce95016e2abf2b1",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b69ffb58ea052ab4f596630386aa800c74b719a26857283ffb9711f9c47754f3",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "122d427f10a11db3174ac681c4827e7b4bdc4e423d4538c4d1d07f58b2c80c7d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5e2d2177a4b7cf6c0acc1a51df1dda9b7f6a08b5b13fb5d0cdde6bb495e253ea",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6723ff48f092dc932ebc819f88650d5928f56f2f815e2d79a1a5e9955abef112",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "bce6c916576fa3a06f6d2b0082489a1830276556488b0c78cb0f0b15ced64296",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2a71daef81185b542f0b7c3cbcd31cdc3ecab0155cc68cbb78560c6c105dd621",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "df0dfd828b078dfdf41569bd05baa7704f1eca5ba9f9d8ace692fb3d189a1eee",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.020007327198982e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "787d4c3e10f9fa5078be9466b53f279ee788f9309ed184dc66cfd92ddd1038b4",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03200204813108039,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "b0b55946319694300dbb210415a681cf1dd2ebc98aef89365c845ec586d1bb95",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03177805800756621,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "6723ff48f092dc932ebc819f88650d5928f56f2f815e2d79a1a5e9955abef112",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03055037313432836,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "122d427f10a11db3174ac681c4827e7b4bdc4e423d4538c4d1d07f58b2c80c7d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.030309988518943745,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "5e2d2177a4b7cf6c0acc1a51df1dda9b7f6a08b5b13fb5d0cdde6bb495e253ea",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.029857397504456328,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "2a71daef81185b542f0b7c3cbcd31cdc3ecab0155cc68cbb78560c6c105dd621",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.02964426877470356,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "df0dfd828b078dfdf41569bd05baa7704f1eca5ba9f9d8ace692fb3d189a1eee",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.02877846790890269,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "c2b9a3e512848cdca37ac6de7f4eca3fd8580eeef45a78f22bf61b962662832c",
+                        "source": "checkpoint/langgraph/checkpoint/serde/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 2.1282482999376953,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "29758cc0a985c25604cdb6fda2ac490d3fd690dd0c85c0bf68629e7e1d067a12",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.101871132850647,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "6723ff48f092dc932ebc819f88650d5928f56f2f815e2d79a1a5e9955abef112",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.9571869373321533,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "b980396597efee482a9f04a72be1d60933e7e0812162e0993569318386a9f314",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.12855538725852966,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "787d4c3e10f9fa5078be9466b53f279ee788f9309ed184dc66cfd92ddd1038b4",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.5822581648826599,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "c2b9a3e512848cdca37ac6de7f4eca3fd8580eeef45a78f22bf61b962662832c",
+                        "source": "checkpoint/langgraph/checkpoint/serde/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.6130277514457703,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.003081300063058734,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "5e2d2177a4b7cf6c0acc1a51df1dda9b7f6a08b5b13fb5d0cdde6bb495e253ea",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "122d427f10a11db3174ac681c4827e7b4bdc4e423d4538c4d1d07f58b2c80c7d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "787d4c3e10f9fa5078be9466b53f279ee788f9309ed184dc66cfd92ddd1038b4",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "189df04a04caef21e623079fcdf657442e6d6bc82fec41e92c692dc01c06f5b6",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d97192880240030d0a3299cd8336f2430df093d8c4be4c6d3bd152182022438d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b5e3a90fb3e0aa389d620b9f638fda2bc51697e47a1e5838679f21dedeac17b5",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3b887ba15a86fe6f690696c67c5571ad63ac811056ffaa0717f370f135c881e4",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "df0dfd828b078dfdf41569bd05baa7704f1eca5ba9f9d8ace692fb3d189a1eee",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "29758cc0a985c25604cdb6fda2ac490d3fd690dd0c85c0bf68629e7e1d067a12",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 0.9651834999676794,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "d97192880240030d0a3299cd8336f2430df093d8c4be4c6d3bd152182022438d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b69ffb58ea052ab4f596630386aa800c74b719a26857283ffb9711f9c47754f3",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5e2d2177a4b7cf6c0acc1a51df1dda9b7f6a08b5b13fb5d0cdde6bb495e253ea",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "122d427f10a11db3174ac681c4827e7b4bdc4e423d4538c4d1d07f58b2c80c7d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "254b0cd7c1b6f94b424326d26666ea3abe6f880f2678f91d8ce95016e2abf2b1",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "df0dfd828b078dfdf41569bd05baa7704f1eca5ba9f9d8ace692fb3d189a1eee",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "189df04a04caef21e623079fcdf657442e6d6bc82fec41e92c692dc01c06f5b6",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "bce6c916576fa3a06f6d2b0082489a1830276556488b0c78cb0f0b15ced64296",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "93713dd6c83aceb47fae0add15b5df7d6e167b5ac619dc9f799c76ed8ae329b2",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "11c4ee5c8da9317846603df8a26a503ca111eaf59f09f4f7392502192651b214",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 6.54999166727066e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "5e2d2177a4b7cf6c0acc1a51df1dda9b7f6a08b5b13fb5d0cdde6bb495e253ea",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.032266458495966696,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "d97192880240030d0a3299cd8336f2430df093d8c4be4c6d3bd152182022438d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03177805800756621,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "122d427f10a11db3174ac681c4827e7b4bdc4e423d4538c4d1d07f58b2c80c7d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.031754032258064516,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "189df04a04caef21e623079fcdf657442e6d6bc82fec41e92c692dc01c06f5b6",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03055037313432836,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "df0dfd828b078dfdf41569bd05baa7704f1eca5ba9f9d8ace692fb3d189a1eee",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.029857397504456328,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "b69ffb58ea052ab4f596630386aa800c74b719a26857283ffb9711f9c47754f3",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.016129032258064516,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "787d4c3e10f9fa5078be9466b53f279ee788f9309ed184dc66cfd92ddd1038b4",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "254b0cd7c1b6f94b424326d26666ea3abe6f880f2678f91d8ce95016e2abf2b1",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015384615384615385,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 2.2569103999994695,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "29758cc0a985c25604cdb6fda2ac490d3fd690dd0c85c0bf68629e7e1d067a12",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.524944543838501,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "254b0cd7c1b6f94b424326d26666ea3abe6f880f2678f91d8ce95016e2abf2b1",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.049333930015564,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "df0dfd828b078dfdf41569bd05baa7704f1eca5ba9f9d8ace692fb3d189a1eee",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.6181809902191162,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "d97192880240030d0a3299cd8336f2430df093d8c4be4c6d3bd152182022438d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.09535954147577286,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "5e2d2177a4b7cf6c0acc1a51df1dda9b7f6a08b5b13fb5d0cdde6bb495e253ea",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.057046663016080856,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 2.6314501999877393,
+                "top_k": 21,
+                "documents": [
+                    {
+                        "chunk_id": "254b0cd7c1b6f94b424326d26666ea3abe6f880f2678f91d8ce95016e2abf2b1",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.9908318519592285,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "b980396597efee482a9f04a72be1d60933e7e0812162e0993569318386a9f314",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.9322209358215332,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "a668ea8b1e6479342264e26ba9a2f84e00508939ad8fe1778203fb0ad7b24d2f",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 1.7069977521896362,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "c2b9a3e512848cdca37ac6de7f4eca3fd8580eeef45a78f22bf61b962662832c",
+                        "source": "checkpoint/langgraph/checkpoint/serde/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.5918898582458496,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.5881476402282715,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "d97192880240030d0a3299cd8336f2430df093d8c4be4c6d3bd152182022438d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.1090220212936401,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "29758cc0a985c25604cdb6fda2ac490d3fd690dd0c85c0bf68629e7e1d067a12",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.3231944143772125,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "d091e0c264c6cb1a15912406aa85e00ccc21c8ec73ad6fa3cd62c261a8aabcea",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.2509368658065796,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "7f91e8e8ef3b783434add3e9dd0bf5f6e043592ee42c990e858afdce05eede9b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.15536437928676605,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "b0b55946319694300dbb210415a681cf1dd2ebc98aef89365c845ec586d1bb95",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.22968725860118866,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "4f2ad0de5a4fb747987881f1ab873beb46a62d0a46d605dbad9beb3ff35484c9",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.33883315324783325,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "5e2d2177a4b7cf6c0acc1a51df1dda9b7f6a08b5b13fb5d0cdde6bb495e253ea",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.3514823317527771,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "54851effaa88959930e4cfe7e648a16cc7ecb3b41d38658c8524ff9b3d33acf8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.4990789592266083,
+                        "rank": 13
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.7152116298675537,
+                        "rank": 14
+                    },
+                    {
+                        "chunk_id": "6723ff48f092dc932ebc819f88650d5928f56f2f815e2d79a1a5e9955abef112",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -1.02129065990448,
+                        "rank": 15
+                    },
+                    {
+                        "chunk_id": "787d4c3e10f9fa5078be9466b53f279ee788f9309ed184dc66cfd92ddd1038b4",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -1.1067111492156982,
+                        "rank": 16
+                    },
+                    {
+                        "chunk_id": "9f56fe0a097c90c799cdd8d20d4c37cb3e94656a45c3ef25ffe50ffeaf83d382",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -1.1889511346817017,
+                        "rank": 17
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -1.6674739122390747,
+                        "rank": 18
+                    },
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -2.024465560913086,
+                        "rank": 19
+                    },
+                    {
+                        "chunk_id": "df0dfd828b078dfdf41569bd05baa7704f1eca5ba9f9d8ace692fb3d189a1eee",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -2.1359915733337402,
+                        "rank": 20
+                    },
+                    {
+                        "chunk_id": "6a348d3f99b9afd429412304ea0fcb26607f61767d3a847217accd86f4718046",
+                        "source": "use-subgraphs.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -3.091773748397827,
+                        "rank": 21
+                    }
+                ]
+            },
+            {
+                "name": "BM25 Retriever",
+                "latency": 0.0022044999059289694,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "2a71daef81185b542f0b7c3cbcd31cdc3ecab0155cc68cbb78560c6c105dd621",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "df0dfd828b078dfdf41569bd05baa7704f1eca5ba9f9d8ace692fb3d189a1eee",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "122d427f10a11db3174ac681c4827e7b4bdc4e423d4538c4d1d07f58b2c80c7d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "4de33178f2b242cb6bf955df26856c622c5d9a5687bb094a9de7538f9ddb42de",
+                        "source": "checkpoint/langgraph/checkpoint/serde/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "8254adbc99edde938f5d04cbcd749e67a628cf077a381c57063df0cd1d2a5190",
+                        "source": "checkpoint/langgraph/checkpoint/serde/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "189df04a04caef21e623079fcdf657442e6d6bc82fec41e92c692dc01c06f5b6",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3d61ef7702aa4e9a102fb397a91fd5ceb3cdcdfd5a01e7d01800e0ddce5b9c26",
+                        "source": "checkpoint/langgraph/checkpoint/serde/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "787d4c3e10f9fa5078be9466b53f279ee788f9309ed184dc66cfd92ddd1038b4",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "630385f785d55beafc7a98572e8d02db50e07422b12d60f318107cd4816a8f53",
+                        "source": "checkpoint/langgraph/checkpoint/serde/encrypted.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "3b887ba15a86fe6f690696c67c5571ad63ac811056ffaa0717f370f135c881e4",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "Dense Retriever",
+                "latency": 1.8735290998592973,
+                "top_k": 10,
+                "documents": [
+                    {
+                        "chunk_id": "254b0cd7c1b6f94b424326d26666ea3abe6f880f2678f91d8ce95016e2abf2b1",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "2a71daef81185b542f0b7c3cbcd31cdc3ecab0155cc68cbb78560c6c105dd621",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "b69ffb58ea052ab4f596630386aa800c74b719a26857283ffb9711f9c47754f3",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "5e2d2177a4b7cf6c0acc1a51df1dda9b7f6a08b5b13fb5d0cdde6bb495e253ea",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "bce6c916576fa3a06f6d2b0082489a1830276556488b0c78cb0f0b15ced64296",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "122d427f10a11db3174ac681c4827e7b4bdc4e423d4538c4d1d07f58b2c80c7d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "6723ff48f092dc932ebc819f88650d5928f56f2f815e2d79a1a5e9955abef112",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "df0dfd828b078dfdf41569bd05baa7704f1eca5ba9f9d8ace692fb3d189a1eee",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "189df04a04caef21e623079fcdf657442e6d6bc82fec41e92c692dc01c06f5b6",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    },
+                    {
+                        "chunk_id": "d97192880240030d0a3299cd8336f2430df093d8c4be4c6d3bd152182022438d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": null,
+                        "rank": null
+                    }
+                ]
+            },
+            {
+                "name": "RRF Fusion",
+                "latency": 4.83999028801918e-05,
+                "top_k": 8,
+                "documents": [
+                    {
+                        "chunk_id": "2a71daef81185b542f0b7c3cbcd31cdc3ecab0155cc68cbb78560c6c105dd621",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.03252247488101534,
+                        "reranker_score": null,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "122d427f10a11db3174ac681c4827e7b4bdc4e423d4538c4d1d07f58b2c80c7d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.031024531024531024,
+                        "reranker_score": null,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "df0dfd828b078dfdf41569bd05baa7704f1eca5ba9f9d8ace692fb3d189a1eee",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.030834914611005692,
+                        "reranker_score": null,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "189df04a04caef21e623079fcdf657442e6d6bc82fec41e92c692dc01c06f5b6",
+                        "source": "checkpoint/langgraph/checkpoint/base/__init__.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.02964426877470356,
+                        "reranker_score": null,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "254b0cd7c1b6f94b424326d26666ea3abe6f880f2678f91d8ce95016e2abf2b1",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.01639344262295082,
+                        "reranker_score": null,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "b69ffb58ea052ab4f596630386aa800c74b719a26857283ffb9711f9c47754f3",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015873015873015872,
+                        "reranker_score": null,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "5e2d2177a4b7cf6c0acc1a51df1dda9b7f6a08b5b13fb5d0cdde6bb495e253ea",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "4de33178f2b242cb6bf955df26856c622c5d9a5687bb094a9de7538f9ddb42de",
+                        "source": "checkpoint/langgraph/checkpoint/serde/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": 0.015625,
+                        "reranker_score": null,
+                        "rank": 8
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 1.4167509998660535,
+                "top_k": 5,
+                "documents": [
+                    {
+                        "chunk_id": "4de33178f2b242cb6bf955df26856c622c5d9a5687bb094a9de7538f9ddb42de",
+                        "source": "checkpoint/langgraph/checkpoint/serde/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.4498623609542847,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "2a71daef81185b542f0b7c3cbcd31cdc3ecab0155cc68cbb78560c6c105dd621",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.7526115775108337,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "122d427f10a11db3174ac681c4827e7b4bdc4e423d4538c4d1d07f58b2c80c7d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.30358272790908813,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "b69ffb58ea052ab4f596630386aa800c74b719a26857283ffb9711f9c47754f3",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.29387199878692627,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "8254adbc99edde938f5d04cbcd749e67a628cf077a381c57063df0cd1d2a5190",
+                        "source": "checkpoint/langgraph/checkpoint/serde/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.16156865656375885,
+                        "rank": 5
+                    }
+                ]
+            },
+            {
+                "name": "Reranker",
+                "latency": 3.4468410999979824,
+                "top_k": 26,
+                "documents": [
+                    {
+                        "chunk_id": "254b0cd7c1b6f94b424326d26666ea3abe6f880f2678f91d8ce95016e2abf2b1",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.9908318519592285,
+                        "rank": 1
+                    },
+                    {
+                        "chunk_id": "b980396597efee482a9f04a72be1d60933e7e0812162e0993569318386a9f314",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.9322209358215332,
+                        "rank": 2
+                    },
+                    {
+                        "chunk_id": "a668ea8b1e6479342264e26ba9a2f84e00508939ad8fe1778203fb0ad7b24d2f",
+                        "source": "checkpointers.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": 1.7069977521896362,
+                        "rank": 3
+                    },
+                    {
+                        "chunk_id": "c2b9a3e512848cdca37ac6de7f4eca3fd8580eeef45a78f22bf61b962662832c",
+                        "source": "checkpoint/langgraph/checkpoint/serde/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.5918898582458496,
+                        "rank": 4
+                    },
+                    {
+                        "chunk_id": "cb9d7fae741216f905b0913d9aff943a58f404bd7bd3c11cacaf37f7c710d255",
+                        "source": "prebuilt/langgraph/prebuilt/tool_node.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.5881476402282715,
+                        "rank": 5
+                    },
+                    {
+                        "chunk_id": "d97192880240030d0a3299cd8336f2430df093d8c4be4c6d3bd152182022438d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 1.1090220212936401,
+                        "rank": 6
+                    },
+                    {
+                        "chunk_id": "29758cc0a985c25604cdb6fda2ac490d3fd690dd0c85c0bf68629e7e1d067a12",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.3231944143772125,
+                        "rank": 7
+                    },
+                    {
+                        "chunk_id": "d091e0c264c6cb1a15912406aa85e00ccc21c8ec73ad6fa3cd62c261a8aabcea",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.2509368658065796,
+                        "rank": 8
+                    },
+                    {
+                        "chunk_id": "7f91e8e8ef3b783434add3e9dd0bf5f6e043592ee42c990e858afdce05eede9b",
+                        "source": "langgraph/langgraph/pregel/main.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": 0.15536437928676605,
+                        "rank": 9
+                    },
+                    {
+                        "chunk_id": "b0b55946319694300dbb210415a681cf1dd2ebc98aef89365c845ec586d1bb95",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.22968725860118866,
+                        "rank": 10
+                    },
+                    {
+                        "chunk_id": "4f2ad0de5a4fb747987881f1ab873beb46a62d0a46d605dbad9beb3ff35484c9",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.33883315324783325,
+                        "rank": 11
+                    },
+                    {
+                        "chunk_id": "5e2d2177a4b7cf6c0acc1a51df1dda9b7f6a08b5b13fb5d0cdde6bb495e253ea",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.3514823317527771,
+                        "rank": 12
+                    },
+                    {
+                        "chunk_id": "54851effaa88959930e4cfe7e648a16cc7ecb3b41d38658c8524ff9b3d33acf8",
+                        "source": "langgraph/langgraph/graph/state.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.4990789592266083,
+                        "rank": 13
+                    },
+                    {
+                        "chunk_id": "9afbf0a45dfbaaedae9a0892b37bd267e86279566d92b85b3bdcd0feabdba1ce",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -0.7152116298675537,
+                        "rank": 14
+                    },
+                    {
+                        "chunk_id": "6723ff48f092dc932ebc819f88650d5928f56f2f815e2d79a1a5e9955abef112",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -1.02129065990448,
+                        "rank": 15
+                    },
+                    {
+                        "chunk_id": "b69ffb58ea052ab4f596630386aa800c74b719a26857283ffb9711f9c47754f3",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -1.043062686920166,
+                        "rank": 16
+                    },
+                    {
+                        "chunk_id": "787d4c3e10f9fa5078be9466b53f279ee788f9309ed184dc66cfd92ddd1038b4",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -1.1067111492156982,
+                        "rank": 17
+                    },
+                    {
+                        "chunk_id": "9f56fe0a097c90c799cdd8d20d4c37cb3e94656a45c3ef25ffe50ffeaf83d382",
+                        "source": "streaming.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -1.1889511346817017,
+                        "rank": 18
+                    },
+                    {
+                        "chunk_id": "35a4244084f9aeff76bd934ac802c9ddc4923a83aeae17d59958c748655bb0eb",
+                        "source": "langgraph/langgraph/types.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -1.6674739122390747,
+                        "rank": 19
+                    },
+                    {
+                        "chunk_id": "2a461e8894f8f8cd8cc05c8a62a7d5d6dbae50f7e585770f11a70d057053f9cd",
+                        "source": "langgraph/langgraph/config.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -2.024465560913086,
+                        "rank": 20
+                    },
+                    {
+                        "chunk_id": "4de33178f2b242cb6bf955df26856c622c5d9a5687bb094a9de7538f9ddb42de",
+                        "source": "checkpoint/langgraph/checkpoint/serde/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -2.0719637870788574,
+                        "rank": 21
+                    },
+                    {
+                        "chunk_id": "df0dfd828b078dfdf41569bd05baa7704f1eca5ba9f9d8ace692fb3d189a1eee",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -2.1359915733337402,
+                        "rank": 22
+                    },
+                    {
+                        "chunk_id": "2a71daef81185b542f0b7c3cbcd31cdc3ecab0155cc68cbb78560c6c105dd621",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -2.1411008834838867,
+                        "rank": 23
+                    },
+                    {
+                        "chunk_id": "8254adbc99edde938f5d04cbcd749e67a628cf077a381c57063df0cd1d2a5190",
+                        "source": "checkpoint/langgraph/checkpoint/serde/base.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -2.958658218383789,
+                        "rank": 24
+                    },
+                    {
+                        "chunk_id": "6a348d3f99b9afd429412304ea0fcb26607f61767d3a847217accd86f4718046",
+                        "source": "use-subgraphs.mdx",
+                        "document_type": "documentation",
+                        "retriever_score": null,
+                        "reranker_score": -3.091773748397827,
+                        "rank": 25
+                    },
+                    {
+                        "chunk_id": "122d427f10a11db3174ac681c4827e7b4bdc4e423d4538c4d1d07f58b2c80c7d",
+                        "source": "checkpoint/langgraph/checkpoint/serde/jsonplus.py",
+                        "document_type": "implementation",
+                        "retriever_score": null,
+                        "reranker_score": -7.757346153259277,
+                        "rank": 26
+                    }
+                ]
+            }
+        ],
+        "generation_metrics": [
+            {
+                "name": "Initial Generation",
+                "answer": "## What the retrieved context establishes\n\n`JsonPlusSerializer` is the serializer used by a checkpointer when configured as its `serde`. Its constructor exposes these relevant controls:\n\n- `pickle_fallback=False` by default.\n- `allowed_json_modules`, which is normalized into a JSON deserialization allowlist.\n- `allowed_msgpack_modules`, which controls which module types the msgpack extension hook may reconstruct.\n- An optional custom `__unpack_ext_hook__`.\n\nThe checkpointer documentation states that `JsonPlusSerializer` uses `ormsgpack` and JSON, and that msgpack does not support every Python object. It specifically documents enabling `pickle_fallback=True` for unsupported objects such as Pandas dataframes:\n\n```python\nfrom langgraph.checkpoint.memory import InMemorySaver\nfrom langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer\n\ngraph.compile(\n    checkpointer=InMemorySaver(\n        serde=JsonPlusSerializer(pickle_fallback=True)\n    )\n)\n```\n\n## Deserialization and type metadata\n\nThe retrieved implementation shows the JSON reviver path. For a decoded JSON dictionary, `_reviver` checks whether it has all of the following metadata:\n\n```python\n{\n    \"lc\": 2,\n    \"type\": \"constructor\",\n    \"id\": ...,\n}\n```\n\nWhen that shape is present, it treats `id` as a type/module identifier and checks whether the identifier is safe or permitted by `allowed_json_modules`. If permitted, it calls `_revive_lc2(value)`, which is the implementation routine responsible for reconstructing that encoded value. The retrieved context does not include `_revive_lc2`, so it does not show the exact constructor lookup or argument reconstruction.\n\nIf the identifier is not allowed, or if the value does not match the constructor metadata shape, `_reviver` returns `LC_REVIVER(value)` instead. Therefore, the available implementation supports this conclusion: JSON type reconstruction is conditional on recognized constructor metadata and the JSON safety/allowlist rules. A value that is decoded without successful reconstruction can remain a normal dictionary-like structure rather than the original Python object.\n\nThat last outcome is a likely explanation for the reported symptom, but it is an inference for this particular `UserContext`: the retrieved context does not show how a dataclass such as `UserContext` is encoded, nor whether it uses the `lc/type/id` JSON-constructor representation or a msgpack extension representation.\n\n## Msgpack and pickle configuration\n\n`JsonPlusSerializer.__init__` creates an unpack extension hook using `_create_msgpack_ext_hook(self._allowed_msgpack_modules)` unless a custom hook is supplied. The default for `allowed_msgpack_modules` depends on strict-mode configuration:\n\n- When strict msgpack mode is enabled, only the implementation's safe msgpack types are allowed.\n- Otherwise, the default is permissive and allows all types, with a warning according to the implementation comments.\n- `allowed_msgpack_modules` can be supplied explicitly to restrict reconstruction.\n\nThus, the serializer configuration affects whether a msgpack-encoded type can be unpacked back into a Python object. The context does not include the extension encoder, `_create_msgpack_ext_hook`, or the exact exception/fallback behavior for a disallowed msgpack type, so the precise representation and failure mode cannot be stated from the retrieved evidence.\n\nPickle is a separate fallback. The documentation says it can be enabled for objects unsupported by the msgpack encoder, using `pickle_fallback=True`. Because the constructor default is `False`, pickle fallback is not enabled unless configured. The retrieved context does not show the exact serialization and deserialization methods that select pickle, nor whether a particular custom dataclass causes that fallback.\n\n## Why the failure can appear after checkpoint creation\n\nThe available code shows that restored checkpoint data is later used to reconstruct graph state. In `Pregel.get_state`, the checkpointer retrieves a saved checkpoint with `checkpointer.get_tuple(config)`, and `_aprepare_state_snapshot` then obtains channels from that saved checkpoint through `achannels_from_checkpoint(...)` before reading the channels into the state snapshot.\n\nThis supports the following execution model:\n\n1. A graph execution produces state containing `UserContext`.\n2. The checkpointer serializes checkpoint values.\n3. A later state retrieval or resume reads the checkpoint and deserializes its values.\n4. The resumed graph receives the reconstructed values.\n5. Application code then uses `state[\"context\"]`.\n\nThe checkpoint write can therefore succeed even if the later reconstruction is not the original type. This is because serialization and deserialization are separate operations, and the retrieved code places reconstruction on the later checkpoint-read path. The application may not inspect or use the restored value until resumed execution, which explains why the error can first become visible then.\n\nThis is an inference about the timing of the observed application failure; the retrieved context does not include a concrete failing `UserContext` checkpoint or the serializer's complete encode/decode implementation.\n\n## Applying this to the example\n\nThe `State` annotation says that `context` is a `UserContext`, but the retrieved `StateGraph` implementation only shows that the schema is registered by `StateGraph.__init__`; it does not establish that schema annotations force checkpoint serializers to reconstruct arbitrary custom Python classes.\n\nConsequently, the safe conclusion is:\n\n- The application assumes `state[\"context\"]` remains a `UserContext`.\n- Whether that assumption holds after a checkpoint round trip depends on the serializer's encoding format and its reconstruction permissions.\n- If the serialized representation is reconstructed only as JSON/msgpack-native data, or reconstruction of the type is rejected by an allowlist/strict-mode rule, the resumed value can differ from the original object.\n- `pickle_fallback=True` may provide a fallback for objects unsupported by msgpack, but the retrieved context does not prove that it is required or sufficient for this specific dataclass.\n\nThe shown code also uses `InMemorySaver`. The retrieved context does not document whether that saver survives a process boundary, so it does not establish that this exact saver can restore a checkpoint after a real process restart. The serialization explanation applies when a checkpoint is actually read by a later execution using the persisted checkpoint data.",
+                "answer_length": 6555,
+                "prompt_tokens": 9093,
+                "completion_tokens": 1917,
+                "total_tokens": 11010,
+                "estimated_cost": 0.004119,
+                "generation_latency": 19.252357400022447,
+                "is_complete": false,
+                "round_number": null,
+                "gaps_detected": [
+                    "JsonPlusSerializer encoding and decoding methods for ordinary Python objects and dataclasses",
+                    "Msgpack extension encoder and allowlist failure/fallback behavior"
+                ]
+            },
+            {
+                "name": "Gap Generation Round 1",
+                "answer": "## Serialization and restoration path\n\n`StateGraph` registers the `State` schema, but the retrieved implementation does not show that the `TypedDict` annotation causes arbitrary custom classes to be reconstructed automatically. Checkpoint serialization is controlled by the checkpointer's serializer.\n\nWhen configured as a checkpointer serializer, `JsonPlusSerializer.dumps_typed()` first assigns a storage type:\n\n- `None` is stored as `(\"null\", ...)`.\n- `bytes` and `bytearray` use dedicated representations.\n- Other values are passed to `_msgpack_enc()`, which calls `ormsgpack.packb(..., default=_msgpack_default, ...)`.\n- If msgpack raises `ormsgpack.MsgpackEncodeError`, the serializer uses pickle only when `pickle_fallback=True`; otherwise it re-raises the encoding error.\n\nThe retrieved context does not include `_msgpack_default`, so it does not establish the exact encoding chosen for this particular `UserContext` dataclass. It does establish the two relevant reconstruction formats: msgpack constructor extensions and legacy/JSON constructor envelopes.\n\n## How type metadata is represented\n\nFor msgpack constructor extensions, the extension hook receives metadata containing a module name, class name, and constructor arguments. The implementation handles forms equivalent to:\n\n- a single constructor argument: `(module, name, argument)`;\n- positional arguments: `(module, name, args)`;\n- keyword arguments: `(module, name, kwargs)`.\n\nFor an allowed constructor, it imports the recorded module, obtains the recorded class, and calls it with the recorded arguments. For example, conceptually, metadata identifying `some_module.UserContext` with positional values would cause the hook to perform the equivalent of `UserContext(*args)`.\n\nFor JSON, `_reviver()` recognizes an envelope with:\n\n```python\n{\n    \"lc\": 2,\n    \"type\": \"constructor\",\n    \"id\": [...],\n    # possibly \"args\" and/or \"kwargs\"\n}\n```\n\nIt passes an allowed envelope to `_revive_lc2()`. That method imports the module named by `id`, gets the named class, and invokes its default constructor with the encoded `args` and/or `kwargs`. The `method` field is intentionally ignored; revival is restricted to the default constructor.\n\nIf JSON revival fails, `_revive_lc2()` logs a warning and returns `None`. If the JSON envelope is not eligible for revival, `_reviver()` leaves it to `LC_REVIVER(value)`. Thus, a constructor envelope is not by itself a guarantee that the original Python object will be recreated.\n\n## Safety and allowlists\n\nThe serializer applies separate controls to the JSON and msgpack paths.\n\n### JSON\n\n`allowed_json_modules` controls which `(module, symbol)` identifiers may be imported for JSON constructor revival. Safe types listed in `SAFE_MSGPACK_TYPES` bypass this gate for backwards compatibility with older JSON checkpoints.\n\nFor other types:\n\n- no allowlist rejects the constructor envelope with `InvalidModuleError`;\n- `allowed_json_modules=True` permits it, but is explicitly described by the implementation as dangerous;\n- an exact `(module, symbol)` entry permits it.\n\nPrefix allowlists are not supported. The allowlist must identify the exact symbol.\n\n### Msgpack\n\n`allowed_msgpack_modules` is passed to `_create_msgpack_ext_hook()`.\n\n- Safe msgpack types are always permitted.\n- An explicit allowlist permits only listed module/name pairs.\n- `True` permits unregistered types while emitting warnings.\n- `None` blocks unregistered types; this is the strict behavior.\n\nIf strict mode is enabled through the serializer's default selection logic, only safe msgpack types are allowed by default. Otherwise, the default is permissive and allows unregistered types with warnings. The implementation also supports the environment-controlled strict behavior described in the constructor comments.\n\nWhen a msgpack constructor is blocked by the allowlist, the hook returns the encoded constructor payload (`tup[2]`) rather than constructing the class. For positional or keyword constructors, that means the caller can receive the raw argument structure instead of a `UserContext`. This directly explains how a restored value can become a plain structure without the checkpoint write failing.\n\nConstructor/import/initialization errors are also caught by the msgpack hook. Depending on the extension type, the hook returns `None` or, for some model-specific cases, the raw payload. Therefore, an unavailable class, an import failure, a constructor mismatch, or a blocked type can all prevent reconstruction.\n\n## Pickle fallback\n\n`pickle_fallback` is an encoding fallback, not a general instruction to reconstruct every object with pickle. It is disabled by default. If msgpack cannot encode an object and `pickle_fallback=True`, `dumps_typed()` returns a `(\"pickle\", pickle.dumps(obj))` representation.\n\nThe checkpointer documentation recommends this option for objects unsupported by msgpack, such as Pandas dataframes. The retrieved context does not include the serializer's corresponding `loads_typed()` implementation, so it does not show the exact pickle dispatch or its security checks. It therefore cannot establish that enabling pickle fallback is required or sufficient for this particular dataclass. It only establishes that pickle is selected when msgpack encoding fails and the option is enabled.\n\n## Why the error appears only after resume\n\nCheckpoint creation and checkpoint restoration are separate operations:\n\n1. Graph execution produces a state containing `UserContext`.\n2. The checkpointer serializes the checkpoint. This can succeed if msgpack can encode the value, or if pickle fallback handles an otherwise unsupported value.\n3. A later `get_state()` or resume retrieves the saved checkpoint.\n4. Pregel obtains channels from the saved checkpoint through `achannels_from_checkpoint(...)`.\n5. The restored channels are read into the `StateSnapshot` and supplied to subsequent graph execution.\n6. Application code then evaluates `state[\"context\"]` and assumes it is still a `UserContext`.\n\nThe implementation of `Pregel.get_state()` shows that the saved checkpoint is read later with `checkpointer.get_tuple(config)`, and `_aprepare_state_snapshot()` reconstructs the state from that saved data. Consequently, the write operation need not detect that a later deserializer will be unable or unwilling to recreate the original class.\n\nFor the shown example, the precise reason depends on how `_msgpack_default` encoded `UserContext` and which serializer configuration was used. However, if the value was encoded with constructor metadata and restoration used a blocked or unavailable type, the retrieved implementation predicts the observed result: the application receives raw constructor data or another fallback representation, and the failure becomes visible when resumed code treats that value as `UserContext`.\n\n`InMemorySaver` is used in the example, but the retrieved context does not establish whether that saver itself persists across an actual process boundary. The serialization behavior above applies when the checkpoint data is genuinely available to a later process and is read with `JsonPlusSerializer`.\n\n## Practical implication\n\nThe serializer used by the writer and reader must have compatible reconstruction settings, and the custom class must remain importable under the recorded module and symbol name. For JSON, that means configuring the exact symbol in `allowed_json_modules` when needed. For msgpack, it means configuring the exact `(module, name)` in `allowed_msgpack_modules` when strict or restricted behavior blocks it. The retrieved context does not provide enough evidence to prescribe a complete configuration for `UserContext`, because the exact encoder and typed-load dispatch are not included.",
+                "answer_length": 7741,
+                "prompt_tokens": 13964,
+                "completion_tokens": 2091,
+                "total_tokens": 16055,
+                "estimated_cost": 0.005302,
+                "generation_latency": 19.15198599989526,
+                "is_complete": false,
+                "round_number": 1,
+                "gaps_detected": [
+                    "JsonPlusSerializer._msgpack_default and loads_typed implementation"
+                ]
+            },
+            {
+                "name": "Gap Generation Round 2",
+                "answer": "## Serialization and restoration path\n\n`StateGraph` accepts the `UserContext` value as part of the state, but the retrieved code does not show that the `TypedDict` annotation itself controls serialization or guarantees reconstruction of arbitrary Python classes. Reconstruction is controlled by the serializer attached to the checkpointer.\n\n### 1. Checkpoint writing\n\n`JsonPlusSerializer.dumps_typed()` assigns an outer serialization type:\n\n- `None` becomes `(\"null\", b\"\")`.\n- `bytes` and `bytearray` use dedicated `\"bytes\"` and `\"bytearray\"` representations.\n- Other values are passed to `_msgpack_enc()`, which calls `ormsgpack.packb(..., default=_msgpack_default, ...)`.\n- If msgpack raises `ormsgpack.MsgpackEncodeError`, pickle is used only when `pickle_fallback=True`; otherwise the encoding error is raised.\n\nThe retrieved context does not include `_msgpack_default`, so it does not establish the exact msgpack representation selected for this particular dataclass. It does establish that supported custom objects may be encoded using msgpack constructor extensions containing the object's module, class name, and constructor data.\n\n### 2. Msgpack restoration and type metadata\n\nFor msgpack data, `loads_typed()` calls:\n\n```python\normsgpack.unpackb(\n    data_,\n    ext_hook=self._unpack_ext_hook,\n    option=ormsgpack.OPT_NON_STR_KEYS,\n)\n```\n\nThe extension hook processes constructor metadata in several forms:\n\n- single argument: module, class name, and one argument;\n- positional arguments: module, class name, and an argument sequence;\n- keyword arguments: module, class name, and a keyword dictionary.\n\nIf the type is allowed, the hook imports the recorded module, obtains the recorded class, and invokes it with the recorded arguments. Conceptually, metadata for `some_module.UserContext` with positional values would result in behavior equivalent to:\n\n```python\nUserContext(*args)\n```\n\nFor keyword metadata, the equivalent operation is `UserContext(**kwargs)`.\n\nIf the type is not allowed, the hook does not reconstruct the class. For constructor extensions it returns the encoded argument payload, such as the positional argument list or keyword dictionary. That produces a plain structure rather than a `UserContext`, which explains why application code can later observe an unexpected representation.\n\nImport failures, constructor failures, and other extension-hook exceptions are caught. Depending on the extension type, the hook returns `None` or a raw payload. Thus, successful checkpoint encoding does not prove that restoration will recreate the original class.\n\n### 3. Legacy JSON restoration\n\nFor a value stored with the outer type `\"json\"`, `loads_typed()` calls `json.loads(..., object_hook=self._reviver)`.\n\n`_reviver()` recognizes constructor envelopes shaped like:\n\n```python\n{\n    \"lc\": 2,\n    \"type\": \"constructor\",\n    \"id\": [\"some_module\", \"UserContext\"],\n    \"args\": [...],\n    \"kwargs\": {...}\n}\n```\n\nIt then calls `_revive_lc2()`. That method:\n\n1. checks whether the recorded module and symbol are allowed;\n2. imports the module;\n3. obtains the named class;\n4. calls the class with the recorded positional or keyword data.\n\nThe `method` field is intentionally ignored. Revival is restricted to the default constructor rather than dispatching an attacker-controlled method name.\n\nIf JSON revival is refused or the constructor cannot be completed, the implementation may leave the value to `LC_REVIVER(value)` or return `None` after logging a warning. Therefore, JSON constructor metadata is also not an unconditional guarantee that the original object will be restored.\n\n### 4. Pickle fallback\n\n`pickle_fallback` is an encoding fallback, not a setting that forces all objects to use pickle.\n\nWhen msgpack encoding fails:\n\n```python\nJsonPlusSerializer(pickle_fallback=True)\n```\n\ncauses `dumps_typed()` to return:\n\n```python\n(\"pickle\", pickle.dumps(obj))\n```\n\nThe checkpointer documentation gives unsupported objects such as Pandas dataframes as an example use case.\n\nOn restoration, `loads_typed()` handles this representation only when both conditions hold:\n\n```python\nself.pickle_fallback and type_ == \"pickle\"\n```\n\nIt then calls `pickle.loads(data_)`. If pickle fallback is disabled for a `\"pickle\"` payload, `loads_typed()` raises `NotImplementedError` for the unknown or disabled serialization type. The retrieved context does not show additional pickle safety checks; therefore pickle should not be treated as a general safe reconstruction mechanism.\n\n### 5. Serializer configuration and safety rules\n\nJSON and msgpack have separate configuration controls.\n\n#### JSON: `allowed_json_modules`\n\nThe JSON path requires an exact `(module, symbol)` allowlist entry for non-safe constructor types. The options are:\n\n- no allowlist: reject the constructor envelope with `InvalidModuleError`;\n- `allowed_json_modules=[(\"my_module\", \"UserContext\")]`: allow that exact symbol;\n- `allowed_json_modules=True`: allow all such symbols, which the implementation labels dangerous.\n\nPrefix allowlists are not supported. Types in `SAFE_MSGPACK_TYPES` bypass this JSON gate for backwards compatibility with older JSON checkpoints.\n\n#### Msgpack: `allowed_msgpack_modules`\n\nThe msgpack extension hook applies these rules:\n\n- safe msgpack types are always allowed;\n- an explicit allowlist permits only the listed module/name pairs;\n- `True` allows unregistered types but emits warnings;\n- `None` blocks unregistered types.\n\nThe constructor selects the default based on strict-mode configuration. With strict msgpack enabled, the default is the safe-type-only mode. Otherwise, the default is permissive and allows unregistered types with warnings. The serializer also provides `with_msgpack_allowlist()` to create a serializer with additional allowed module/type pairs.\n\nFor a custom class such as `UserContext`, reconstruction therefore depends on all of the following being compatible between the writer and reader:\n\n- the class being encoded with reconstructible constructor metadata;\n- the module and class name remaining importable and unchanged;\n- the reader's allowlist permitting that exact symbol;\n- the constructor accepting the serialized arguments.\n\n### 6. Why the failure appears after resume\n\nCheckpoint creation and checkpoint restoration occur at different times:\n\n1. Graph execution holds a `UserContext` instance in the in-memory state.\n2. The checkpointer serializes the checkpoint. Encoding can succeed because msgpack can store constructor metadata, even though reconstruction has not yet occurred.\n3. A later `get_state()` or resumed invocation reads the saved checkpoint using `checkpointer.get_tuple(config)`.\n4. Pregel reconstructs channels from the saved checkpoint through `achannels_from_checkpoint(...)`.\n5. The restored channel values are read into the state snapshot and supplied to subsequent graph execution.\n6. Application code then assumes `state[\"context\"]` is still a `UserContext`.\n\nThe write path only needs to encode the value. The reconstruction decision—including import availability, constructor success, and allowlist checks—occurs on the later load path. Consequently, a checkpoint may be written successfully while the resumed state contains a dictionary, argument list, `None`, or another fallback representation.\n\nFor the supplied example, the exact cause cannot be narrowed to one branch from the retrieved context because `_msgpack_default`, the function that selects the concrete msgpack extension representation for `UserContext`, is not included. The supported explanation is that the value was either encoded with constructor metadata and later blocked or failed during reconstruction, or was loaded through a representation that does not reconstruct the class. The `State` `TypedDict` annotation does not, according to the retrieved material, override those serializer rules.\n\n`InMemorySaver` is shown in the example, but the retrieved context does not establish how its contents survive an actual process boundary. The described post-restart behavior applies when checkpoint bytes are genuinely persisted and later read using a compatible serializer configuration.",
+                "answer_length": 8136,
+                "prompt_tokens": 15626,
+                "completion_tokens": 2121,
+                "total_tokens": 17747,
+                "estimated_cost": 0.0056704,
+                "generation_latency": 18.745104799978435,
+                "is_complete": false,
+                "round_number": 2,
+                "gaps_detected": [
+                    "The `_msgpack_default` implementation that encodes dataclasses and other custom Python objects"
+                ]
+            }
+        ],
+        "judge_evaluation": {
+            "correctness": {
+                "score": 5.0,
+                "justification": "The answer accurately describes the serialization and deserialization process of JsonPlusSerializer, including type metadata, fallbacks, configuration, and the timing of potential failures, entirely based on the provided context."
+            },
+            "groundedness": {
+                "score": 5.0,
+                "justification": "All technical claims, explanations of methods, and configuration options are directly supported by the provided Python source code and documentation snippets. No external information was introduced."
+            },
+            "completeness": {
+                "score": 5.0,
+                "justification": "The answer thoroughly addresses all aspects of the user's question, covering the serialization/deserialization path, type metadata, pickle/msgpack fallbacks, serializer configuration, and the timing of the failure, incorporating all expected concepts."
+            },
+            "hallucination": {
+                "score": 0.0,
+                "justification": "The answer contains no unsupported or fabricated technical claims. All details are derived from the provided context."
+            },
+            "missing_concepts": [],
+            "unsupported_claims": []
+        },
+        "overall_metrics": {
+            "total_latency": 83.36904720007442,
+            "total_cost": 0.0249293,
+            "recall_at_k": 0.6,
+            "precision_at_k": 0.2,
+            "hit_rate": 1.0,
+            "mrr": 0.14285714285714285
+        }
+    }
+]

@@ -15,7 +15,6 @@ class MetadataFilters(BaseModel):
     """
 
     corpus: Literal["implementation", "documentation"] | None = None
-    module_names: list[str] | None = Field(default_factory=list)
     class_names: list[str] | None = Field(default_factory=list)
     function_names: list[str] | None = Field(default_factory=list)
     category: Literal["general", "errors", "frontend"] | None = None

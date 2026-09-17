@@ -1,7 +1,7 @@
 from models.query_input import QueryInput
 from models.generation import GeneratedAnswer, RetrievalGap
 from models.retrieval_plan import RetrievalPlan
-from models.rag_state import RAGState, RAGStage
+from models.rag_state import RAGState, RAGStage, RunStatus
 from models.evidence import EvidenceItem
 
 from router.query_router import QueryRouter
@@ -10,7 +10,7 @@ from prompt.generation_prompt import generation_prompt
 
 from reranking.base_reranker import BaseReranker
 
-from retrieval.retrieval_orchestrator import retrieve_candidates, build_rerank_query, _dedupe
+from retrieval.retrieval_orchestrator import retrieve_candidates, build_rerank_query
 from retrieval.hybrid_retriever import HybridRetriever
 from retrieval.multi_corpus_retriever import MultiCorpusRetriever
 from retrieval.multi_query_retrieval_strategy import MultiQueryRetrievalStrategy
@@ -20,7 +20,8 @@ from evidence.base_selector import EvidenceSelector
 from evaluation.observer import PipelineObserver
 
 from checkpoint.store import CheckpointStore
-from checkpoint.serialization import create_checkpoint
+from checkpoint.serialization import create_checkpoint, restore_state
+from checkpoint.resolver import EvidenceResolver
 
 from utils.document_formatter import format_retrieved_context
 from utils.helper import calculate_estimated_cost
@@ -30,7 +31,8 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
 from time import perf_counter
-from uuid import uuid4
+import threading
+import time
 
 from config import (
     MAX_GENERATION_ROUNDS, 
@@ -41,8 +43,7 @@ from config import (
     RERANK_TOP_K
 )
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from time import perf_counter
+from concurrent.futures import ThreadPoolExecutor
 
 class AgenticRAG():
     def __init__(
@@ -56,7 +57,8 @@ class AgenticRAG():
         reranker: BaseReranker,
         code_vector_store: Chroma,
         evidence_selector: EvidenceSelector,
-        checkpoint_store: CheckpointStore):
+        checkpoint_store: CheckpointStore,
+        evidence_resolver: EvidenceResolver):
 
         self._query_router = query_router
         self._doc_hybrid_retriever = doc_hybrid_retriever
@@ -67,6 +69,7 @@ class AgenticRAG():
         self._code_vector_store = code_vector_store
         self._evidence_selector = evidence_selector
         self._checkpoint_store = checkpoint_store
+        self._evidence_resolver = evidence_resolver
 
         self._generation_llm = generation_llm.with_structured_output(
             GeneratedAnswer,
@@ -189,42 +192,52 @@ class AgenticRAG():
         )
 
         return reranked_gap_candidates, gap_observer
-    
-    def run(self, query_input: QueryInput, observer: PipelineObserver | None = None) -> GeneratedAnswer:
-        # Initiate run_id
-        run_id = uuid4().hex
 
-        # Initialize RAG state
-        state = RAGState(query_input=query_input)
-
-        # Get retrieval plan
-        state.retrieval_plan = self._query_router.route(query=query_input, observer=observer)
-        state.stage = RAGStage.ROUTED
-
-        # Save checkpoint after ROUTED
-        self._checkpoint_store.save(run_id, create_checkpoint(state))
-
+    def _generate_gap_round(self, state: RAGState, observer: PipelineObserver | None) -> None:
+        # Format retrieved context and store it
+        formatted_context = format_retrieved_context(
+            [evidence_item.document for evidence_item in state.final_evidence]
+        )
         if observer is not None:
-            observer.record_retrieval_plan(state.retrieval_plan)
-
-        # Get retrieval candidates
-        retrieval_candidates = retrieve_candidates(
-                query_input=state.query_input,
-                plan=state.retrieval_plan,
-                doc_hybrid_retriever=self._doc_hybrid_retriever,
-                code_hybrid_retriever=self._code_hybrid_retriever,
-                multi_corpus_retriever=self._multi_corpus_retriever,
-                multi_query_strategy=self._multi_query_strategy,
-                code_vector_store=self._code_vector_store,
-                observer=observer
+            observer.record_context(formatted_context)
+        
+        gap_generation_llm_prompt = generation_prompt.format(
+            context=formatted_context,
+            question=state.reranker_query,
+            previous_answer=state.generated_answer.answer,
         )
 
-        # Rerank retrieval candidates
+        state.generated_answer = self._generate(
+            llm=self._generation_llm,
+            prompt=gap_generation_llm_prompt,
+            stage_name=f"Gap Generation Round {state.generation_round + 1}",
+            round_number=state.generation_round + 1,
+            observer=observer,
+        )
+
+        state.generation_round += 1
+
+    def _retrieve_initial_evidence(self, state: RAGState, observer: PipelineObserver | None) -> None:
+
+        # Retrieve initial evidence
+        retrieval_candidates = retrieve_candidates(
+            query_input=state.query_input,
+            plan=state.retrieval_plan,
+            doc_hybrid_retriever=self._doc_hybrid_retriever,
+            code_hybrid_retriever=self._code_hybrid_retriever,
+            multi_corpus_retriever=self._multi_corpus_retriever,
+            multi_query_strategy=self._multi_query_strategy,
+            code_vector_store=self._code_vector_store,
+            observer=observer,
+        )
+
         state.reranker_query = build_rerank_query(state.query_input)
+
+        # Rerank initial evidence
         initial_evidence = self._reranker.rerank(
             query=state.reranker_query,
             documents=retrieval_candidates,
-            observer=observer
+            observer=observer,
         )
 
         state.initial_evidence = [
@@ -232,137 +245,195 @@ class AgenticRAG():
                 document=doc,
                 source="initial",
                 query=state.reranker_query,
-                gap=None
+                gap=None,
             )
             for doc in initial_evidence
         ]
 
         state.evidence_pool = list(state.initial_evidence)
-        state.stage = RAGStage.INITIAL_EVIDENCE_READY
 
-        # Save checkpoint after INITIAL_EVIDENCE_READY
-        self._checkpoint_store.save(run_id, create_checkpoint(state))
-
-        # Format retrieved context and store it
-        formatted_context = format_retrieved_context(
-            [evidence_item.document for evidence_item in state.evidence_pool]
-        )
-        if state.evidence_pool and observer is not None:
-            observer.record_context(formatted_context)
-
-        # Generate response
-        generation_llm_prompt = generation_prompt.format(
-            context=formatted_context,
-            question=state.reranker_query,
-            previous_answer="No previous draft. This is the initial answer."
+    def _select_final_evidence(self, state: RAGState, observer: PipelineObserver | None) -> None:
+        state.final_evidence = self._evidence_selector.select_evidence(
+            query=state.reranker_query,
+            evidence=state.evidence_pool,
+            top_k=RERANK_TOP_K,
+            gaps=state.gaps,
+            observer=observer,
         )
 
-        state.generated_answer = self._generate(
-            llm=self._generation_llm,
-            prompt=generation_llm_prompt,
-            stage_name="Initial Generation",
-            observer=observer
+    def _heartbeat_loop(self, run_id: str, stop_event: threading.Event) -> None:
+        while not stop_event.wait(5):
+            try:
+                self._checkpoint_store.heartbeat(run_id)
+            except Exception:
+                # Heartbeat failure should not kill RAG run
+                pass
+
+    
+    def run(
+        self, 
+        query_input: QueryInput, 
+        run_id: str,
+        observer: PipelineObserver | None = None,
+        resume: bool = False
+    ) -> GeneratedAnswer:
+
+        # Initiate run_id and rag_state
+        if resume:
+            checkpoint = self._checkpoint_store.load(run_id)
+            state = restore_state(checkpoint, self._evidence_resolver)
+        else: 
+            state = RAGState(query_input=query_input)
+            # Get retrieval plan
+            state.retrieval_plan = self._query_router.route(query=query_input, observer=observer)
+            state.stage = RAGStage.ROUTED
+
+            # Save checkpoint after ROUTED
+            self._checkpoint_store.save(run_id, create_checkpoint(state))
+
+            if observer is not None:
+                observer.record_retrieval_plan(state.retrieval_plan)
+
+        # Initialize heartbeat
+        stop_event = threading.Event()
+        heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            args=(run_id, stop_event),
+            daemon=True,
         )
-        state.stage = RAGStage.DRAFT_GENERATED
+        heartbeat_thread.start()
 
-        # Save checkpoint after DRAFT_GENERATED
-        self._checkpoint_store.save(run_id, create_checkpoint(state))
+        try: 
 
-        if state.generated_answer.is_complete:
+            if state.stage == RAGStage.ROUTED:
+                self._retrieve_initial_evidence(state, observer)
+                state.stage = RAGStage.INITIAL_EVIDENCE_READY
+
+                # Save checkpoint after INITIAL_EVIDENCE_READY
+                self._checkpoint_store.save(run_id, create_checkpoint(state))
+
+            if state.stage == RAGStage.INITIAL_EVIDENCE_READY:
+                # Format retrieved context and store it
+                formatted_context = format_retrieved_context(
+                    [evidence_item.document for evidence_item in state.evidence_pool]
+                )
+                if state.evidence_pool and observer is not None:
+                    observer.record_context(formatted_context)
+
+                # Generate response
+                generation_llm_prompt = generation_prompt.format(
+                    context=formatted_context,
+                    question=state.reranker_query,
+                    previous_answer="No previous draft. This is the initial answer."
+                )
+
+                state.generated_answer = self._generate(
+                    llm=self._generation_llm,
+                    prompt=generation_llm_prompt,
+                    stage_name="Initial Generation",
+                    observer=observer
+                )
+                state.stage = RAGStage.DRAFT_GENERATED
+
+                # Save checkpoint after DRAFT_GENERATED
+                self._checkpoint_store.save(run_id, create_checkpoint(state))
+
+            if state.stage == RAGStage.DRAFT_GENERATED:
+
+                if state.generated_answer.is_complete:
+                    state.stage = RAGStage.COMPLETED
+                    self._checkpoint_store.save(run_id, create_checkpoint(state))
+                    self._checkpoint_store.update_status(run_id, RunStatus.COMPLETED)
+                    return state.generated_answer
+
+                # Check for gaps in answer
+
+                print(f"Initial candidates: {len(state.evidence_pool)}")
+
+            if state.stage == RAGStage.GAPS_PROCESSED:
+                # Generate final context
+                self._select_final_evidence(state, observer)
+
+                state.stage = RAGStage.FINAL_EVIDENCE_READY
+
+            if state.stage == RAGStage.FINAL_EVIDENCE_READY:
+                self._generate_gap_round(state, observer)
+                state.stage = RAGStage.GAP_GENERATION_COMPLETED
+                # Save checkpoint after gap round
+                self._checkpoint_store.save(run_id, create_checkpoint(state))
+
+                if state.generated_answer.is_complete:
+                    state.stage = RAGStage.COMPLETED
+
+                    self._checkpoint_store.save(run_id, create_checkpoint(state))
+                    self._checkpoint_store.update_status(run_id, RunStatus.COMPLETED)
+                    return state.generated_answer
+
+                # Save checkpoint after FINAL_EVIDENCE_READY
+                self._checkpoint_store.save(run_id, create_checkpoint(state))
+
+            while state.generation_round < MAX_GENERATION_ROUNDS:
+                print(f"\n========== GAP ROUND {state.generation_round + 1} ==========")
+
+                if state.generated_answer.is_complete:
+                    state.stage = RAGStage.COMPLETED
+                    self._checkpoint_store.save(run_id, create_checkpoint(state))
+                    self._checkpoint_store.update_status(run_id, RunStatus.COMPLETED)
+                    print("Answer already complete. Stopping.")
+                    return state.generated_answer
+                
+                state.gaps = self._select_gaps(state.generated_answer.gaps)
+                print(f"Selected {len(state.gaps)} gaps for retrieval")
+
+                if not state.gaps:
+                    print("No gaps found. Stopping.")
+                    state.stage = RAGStage.COMPLETED
+                    self._checkpoint_store.save(run_id, create_checkpoint(state))
+                    self._checkpoint_store.update_status(run_id, RunStatus.COMPLETED)
+                    return state.generated_answer
+
+                # Run the gap loop parallely
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    futures = [executor.submit(self._process_gap, gap) for gap in state.gaps]
+                    gap_results = [f.result() for f in futures]
+
+                for i, (gap_candidates, gap_observer) in enumerate(gap_results, start=1):
+                    print(f"Gap {i} retrieved {len(gap_candidates)} documents")
+                    if observer is not None:
+                        observer.get_pipeline_stages().extend(gap_observer.get_pipeline_stages())
+
+                    state.evidence_pool.extend(gap_candidates)
+
+                state.stage = RAGStage.GAPS_PROCESSED
+                # Save checkpoint after GAPS_PROCESSED
+                self._checkpoint_store.save(run_id, create_checkpoint(state))
+
+                # Generate final context
+                self._select_final_evidence(state, observer)
+                state.stage = RAGStage.FINAL_EVIDENCE_READY
+
+                # Save checkpoint after FINAL_EVIDENCE_READY
+                self._checkpoint_store.save(run_id, create_checkpoint(state))
+
+                self._generate_gap_round(state, observer)
+                state.stage = RAGStage.GAP_GENERATION_COMPLETED
+
+                # Save checkpoint after GAP_GENERATION_COMPLETED
+                self._checkpoint_store.save(run_id, create_checkpoint(state))  
+
+                print("\n========== GAP ROUND RESULT ==========")
+                print("Is complete:", state.generated_answer.is_complete)
+                print("Remaining gaps:", len(state.generated_answer.gaps))
+
+            # print("\n========== GENERATION PROMPT ==========")
+            # print(gap_generation_llm_prompt if gap_generation_llm_prompt else generation_llm_prompt)
             state.stage = RAGStage.COMPLETED
-            # Delete checkpoint after COMPLETED
-            self._checkpoint_store.delete(run_id)
+
+            self._checkpoint_store.save(run_id, create_checkpoint(state))
+            self._checkpoint_store.update_status(run_id, RunStatus.COMPLETED)
             return state.generated_answer
 
-        # Check for gaps in answer
-
-        print(f"Initial candidates: {len(state.evidence_pool)}")
-
-        while state.generation_round < MAX_GENERATION_ROUNDS:
-            print(f"\n========== GAP ROUND {state.generation_round + 1} ==========")
-
-            if state.generated_answer.is_complete:
-                state.stage = RAGStage.COMPLETED
-
-                # Delete checkpoint after COMPLETED
-                self._checkpoint_store.delete(run_id)
-                print("Answer already complete. Stopping.")
-                return state.generated_answer
-            
-            state.gaps = self._select_gaps(state.generated_answer.gaps)
-            print(f"Selected {len(state.gaps)} gaps for retrieval")
-
-            if not state.gaps:
-                print("No gaps found. Stopping.")
-                state.stage = RAGStage.COMPLETED
-
-                # Delete checkpoint after COMPLETED
-                self._checkpoint_store.delete(run_id)
-                return state.generated_answer
-
-            # Run the gap loop parallely
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                futures = [executor.submit(self._process_gap, gap) for gap in state.gaps]
-                gap_results = [f.result() for f in futures]
-
-            for i, (gap_candidates, gap_observer) in enumerate(gap_results, start=1):
-                print(f"Gap {i} retrieved {len(gap_candidates)} documents")
-                if observer is not None:
-                    observer.get_pipeline_stages().extend(gap_observer.get_pipeline_stages())
-
-                state.evidence_pool.extend(gap_candidates)
-
-            state.stage = RAGStage.GAPS_PROCESSED
-
-            # Save checkpoint after GAPS_PROCESSED
-            self._checkpoint_store.save(run_id, create_checkpoint(state))
-
-            # Generate final context
-            state.final_evidence = self._evidence_selector.select_evidence(
-                query=state.reranker_query,
-                evidence=state.evidence_pool,
-                top_k=RERANK_TOP_K,
-                gaps=state.gaps,
-                observer=observer
-            )
-
-            formatted_context = format_retrieved_context(
-                [evidence_item.document for evidence_item in state.final_evidence]
-            )
-            if state.final_evidence and observer is not None:
-                observer.record_context(formatted_context)
-
-            state.stage = RAGStage.FINAL_EVIDENCE_READY
-
-            # Save checkpoint after FINAL_EVIDENCE_READY
-            self._checkpoint_store.save(run_id, create_checkpoint(state))
-
-            # Format generation prompt for gap
-            gap_generation_llm_prompt = generation_prompt.format(
-                context=formatted_context,
-                question=state.reranker_query,
-                previous_answer=state.generated_answer.answer
-            )
-
-            # Get structured response from generation llm
-            state.generated_answer = self._generate(
-                llm=self._generation_llm,
-                prompt=gap_generation_llm_prompt,
-                stage_name=f"Gap Generation Round {state.generation_round + 1}",
-                round_number=state.generation_round + 1,
-                observer=observer
-            )
-            state.generation_round += 1
-
-            print("\n========== GAP ROUND RESULT ==========")
-            print("Is complete:", state.generated_answer.is_complete)
-            print("Remaining gaps:", len(state.generated_answer.gaps))
-
-        # print("\n========== GENERATION PROMPT ==========")
-        # print(gap_generation_llm_prompt if gap_generation_llm_prompt else generation_llm_prompt)
-        state.stage = RAGStage.COMPLETED
-
-        # Delete checkpoint after COMPLETED
-        self._checkpoint_store.delete(run_id)
-        return state.generated_answer
-    
+        finally:
+            # Stop heartbeat when execution ends
+            stop_event.set()
+            heartbeat_thread.join(timeout=1)
