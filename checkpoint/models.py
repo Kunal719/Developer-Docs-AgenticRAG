@@ -17,7 +17,6 @@ class EvidenceItemCheckpoint(BaseModel):
     gap: RetrievalGap | None = None
 
 class RunStatus(str, Enum):
-    CREATED = "created"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"

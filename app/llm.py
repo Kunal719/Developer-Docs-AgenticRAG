@@ -9,4 +9,8 @@ def get_llm(model_name: str, model_provider:str, max_tokens: int | None = None, 
         model_name: Name of the model
         model_provider: Provider of the chat model
     """
-    return init_chat_model(model=model_name, model_provider=model_provider, max_tokens=max_tokens, temperature=temperature)
+    return init_chat_model(
+        model=model_name, 
+        model_provider=model_provider, 
+        max_tokens=max_tokens, 
+        temperature=temperature)

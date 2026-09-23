@@ -1,8 +1,9 @@
 from models.query_input import QueryInput
 from models.generation import GeneratedAnswer, RetrievalGap
 from models.retrieval_plan import RetrievalPlan
-from models.rag_state import RAGState, RAGStage, RunStatus
+from models.rag_state import RAGState, RAGStage
 from models.evidence import EvidenceItem
+from models.streaming import AnswerStreamParser
 
 from router.query_router import QueryRouter
 
@@ -22,9 +23,11 @@ from evaluation.observer import PipelineObserver
 from checkpoint.store import CheckpointStore
 from checkpoint.serialization import create_checkpoint, restore_state
 from checkpoint.resolver import EvidenceResolver
+from checkpoint.models import RunStatus
 
 from utils.document_formatter import format_retrieved_context
 from utils.helper import calculate_estimated_cost
+from utils.structured_generation_output import make_openai_strict
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_chroma import Chroma
@@ -32,7 +35,9 @@ from langchain_core.documents import Document
 
 from time import perf_counter
 import threading
-import time
+import json
+from collections.abc import Callable
+import logging
 
 from config import (
     MAX_GENERATION_ROUNDS, 
@@ -44,6 +49,8 @@ from config import (
 )
 
 from concurrent.futures import ThreadPoolExecutor
+
+logger = logging.getLogger(__name__)
 
 class AgenticRAG():
     def __init__(
@@ -71,11 +78,27 @@ class AgenticRAG():
         self._checkpoint_store = checkpoint_store
         self._evidence_resolver = evidence_resolver
 
-        self._generation_llm = generation_llm.with_structured_output(
-            GeneratedAnswer,
-            method="json_schema",
-            include_raw=True
-        ).bind(
+        # self._generation_llm = generation_llm.with_structured_output(
+        #     GeneratedAnswer,
+        #     method="json_schema",
+        #     include_raw=True
+        # ).bind(
+        #     prompt_cache_key="agentic_rag_generation",
+        #     prompt_cache_options={"mode": "explicit", "ttl": "30m"}
+        # )
+
+        generation_schema = GeneratedAnswer.model_json_schema()
+        make_openai_strict(generation_schema)
+
+        self._generation_llm = generation_llm.bind(
+            response_format={
+                "type": "json_schema",
+                "json_schema":{
+                    "name": "generated_answer",
+                    "schema": generation_schema,
+                    "strict": True
+                }
+            },
             prompt_cache_key="agentic_rag_generation",
             prompt_cache_options={"mode": "explicit", "ttl": "30m"}
         )
@@ -92,24 +115,51 @@ class AgenticRAG():
         actionable_gaps.sort(key=lambda gap: priority[gap.priority])
 
         return actionable_gaps[:MAX_GAPS_PER_ROUND]
-
-        
+    
     def _generate(
             self, 
             llm: BaseChatModel, 
             prompt: str, 
             stage_name: str, 
             observer: PipelineObserver, 
-            round_number: int | None = None, 
+            round_number: int | None = None,
+            on_answer_delta: Callable[[str], None] | None = None,
+            on_generation_started: Callable[[int], None] | None = None
     ) -> GeneratedAnswer:
+
+        if on_generation_started is not None and round_number is not None:
+            on_generation_started(round_number)
         
         start_time = perf_counter()
-        response = llm.invoke(prompt)
+
+        parser = AnswerStreamParser()
+        json_buffer = ""
+        usage = None
+
+        for chunk in llm.stream(prompt):
+            delta = chunk.content
+
+            if delta:
+                json_buffer += delta
+
+                answer_delta = parser.feed(delta)
+
+                if answer_delta and on_answer_delta is not None:
+                    on_answer_delta(answer_delta)
+
+            if chunk.usage_metadata:
+                usage = chunk.usage_metadata
+
         end_time = perf_counter()
 
-        raw_response = response["raw"]
-        generated_answer : GeneratedAnswer = response["parsed"]
-        usage = raw_response.usage_metadata
+        if usage is None:
+            raise RuntimeError(
+                "Generation stream completed without usage metadata"
+            )
+
+        generated_answer = GeneratedAnswer.model_validate(
+            json.loads(json_buffer)
+        )
 
         if observer is not None:
             observer.record_generation(
@@ -127,8 +177,11 @@ class AgenticRAG():
                     output_price_per_million=GENERATION_OUTPUT_PRICE,
                 ),
                 generation_latency=(end_time - start_time),
-                gaps_detected=[gap.missing_topic for gap in generated_answer.gaps],
-                is_complete=generated_answer.is_complete
+                gaps_detected=[
+                    gap.missing_topic
+                    for gap in generated_answer.gaps
+                ],
+                is_complete=generated_answer.is_complete,
             )
 
         return generated_answer
@@ -193,7 +246,13 @@ class AgenticRAG():
 
         return reranked_gap_candidates, gap_observer
 
-    def _generate_gap_round(self, state: RAGState, observer: PipelineObserver | None) -> None:
+    def _generate_gap_round(
+            self, 
+            state: RAGState, 
+            observer: PipelineObserver | None, 
+            on_answer_delta: Callable[[str], None] | None = None,
+            on_generation_started: Callable[[int], None] | None = None
+    ) -> None:
         # Format retrieved context and store it
         formatted_context = format_retrieved_context(
             [evidence_item.document for evidence_item in state.final_evidence]
@@ -213,6 +272,8 @@ class AgenticRAG():
             stage_name=f"Gap Generation Round {state.generation_round + 1}",
             round_number=state.generation_round + 1,
             observer=observer,
+            on_answer_delta=on_answer_delta,
+            on_generation_started=on_generation_started
         )
 
         state.generation_round += 1
@@ -274,14 +335,26 @@ class AgenticRAG():
         self, 
         query_input: QueryInput, 
         run_id: str,
+        user_id: str,
         observer: PipelineObserver | None = None,
-        resume: bool = False
+        resume: bool = False,
+        on_answer_delta: Callable[[str], None] | None = None,
+        on_generation_started: Callable[[int], None] | None = None
     ) -> GeneratedAnswer:
 
         # Initiate run_id and rag_state
         if resume:
-            checkpoint = self._checkpoint_store.load(run_id)
+            checkpoint = self._checkpoint_store.load(run_id, user_id)
             state = restore_state(checkpoint, self._evidence_resolver)
+
+            logger.info(
+                "Resuming run %s from stage=%s, generation_round=%s.",
+                run_id,
+                state.stage.value,
+                state.generation_round,
+            )
+
+            self._checkpoint_store.resume_run(run_id, user_id)
         else: 
             state = RAGState(query_input=query_input)
             # Get retrieval plan
@@ -289,7 +362,7 @@ class AgenticRAG():
             state.stage = RAGStage.ROUTED
 
             # Save checkpoint after ROUTED
-            self._checkpoint_store.save(run_id, create_checkpoint(state))
+            self._checkpoint_store.create_run(run_id, user_id, create_checkpoint(state))
 
             if observer is not None:
                 observer.record_retrieval_plan(state.retrieval_plan)
@@ -306,13 +379,21 @@ class AgenticRAG():
         try: 
 
             if state.stage == RAGStage.ROUTED:
+                logger.info(
+                    "Run %s continuing from ROUTED, executing initial retrieval.",
+                    run_id,
+                )
                 self._retrieve_initial_evidence(state, observer)
                 state.stage = RAGStage.INITIAL_EVIDENCE_READY
 
                 # Save checkpoint after INITIAL_EVIDENCE_READY
-                self._checkpoint_store.save(run_id, create_checkpoint(state))
+                self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
 
             if state.stage == RAGStage.INITIAL_EVIDENCE_READY:
+                logger.warning(
+                    "Run %s continuing from INITIAL_EVIDENCE_READY, starting initial generation.",
+                    run_id,
+                )
                 # Format retrieved context and store it
                 formatted_context = format_retrieved_context(
                     [evidence_item.document for evidence_item in state.evidence_pool]
@@ -331,18 +412,22 @@ class AgenticRAG():
                     llm=self._generation_llm,
                     prompt=generation_llm_prompt,
                     stage_name="Initial Generation",
-                    observer=observer
+                    observer=observer,
+                    round_number=state.generation_round,
+                    on_answer_delta=on_answer_delta,
+                    on_generation_started=on_generation_started
                 )
                 state.stage = RAGStage.DRAFT_GENERATED
 
                 # Save checkpoint after DRAFT_GENERATED
-                self._checkpoint_store.save(run_id, create_checkpoint(state))
+                self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
 
             if state.stage == RAGStage.DRAFT_GENERATED:
+                logger.info(f"Run {run_id} continuing from DRAFT_GENERATED.")
 
                 if state.generated_answer.is_complete:
                     state.stage = RAGStage.COMPLETED
-                    self._checkpoint_store.save(run_id, create_checkpoint(state))
+                    self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
                     self._checkpoint_store.update_status(run_id, RunStatus.COMPLETED)
                     return state.generated_answer
 
@@ -351,33 +436,35 @@ class AgenticRAG():
                 print(f"Initial candidates: {len(state.evidence_pool)}")
 
             if state.stage == RAGStage.GAPS_PROCESSED:
+                logger.info(f"Run {run_id} continuing from GAPS_PROCESSED.")
                 # Generate final context
                 self._select_final_evidence(state, observer)
 
                 state.stage = RAGStage.FINAL_EVIDENCE_READY
 
             if state.stage == RAGStage.FINAL_EVIDENCE_READY:
-                self._generate_gap_round(state, observer)
+                logger.info(f"Run {run_id} continuing from FINAL_EVIDENCE_READY.")
+                self._generate_gap_round(state, observer, on_answer_delta, on_generation_started)
                 state.stage = RAGStage.GAP_GENERATION_COMPLETED
                 # Save checkpoint after gap round
-                self._checkpoint_store.save(run_id, create_checkpoint(state))
+                self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
 
                 if state.generated_answer.is_complete:
                     state.stage = RAGStage.COMPLETED
 
-                    self._checkpoint_store.save(run_id, create_checkpoint(state))
+                    self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
                     self._checkpoint_store.update_status(run_id, RunStatus.COMPLETED)
                     return state.generated_answer
 
                 # Save checkpoint after FINAL_EVIDENCE_READY
-                self._checkpoint_store.save(run_id, create_checkpoint(state))
+                self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
 
             while state.generation_round < MAX_GENERATION_ROUNDS:
                 print(f"\n========== GAP ROUND {state.generation_round + 1} ==========")
 
                 if state.generated_answer.is_complete:
                     state.stage = RAGStage.COMPLETED
-                    self._checkpoint_store.save(run_id, create_checkpoint(state))
+                    self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
                     self._checkpoint_store.update_status(run_id, RunStatus.COMPLETED)
                     print("Answer already complete. Stopping.")
                     return state.generated_answer
@@ -388,7 +475,7 @@ class AgenticRAG():
                 if not state.gaps:
                     print("No gaps found. Stopping.")
                     state.stage = RAGStage.COMPLETED
-                    self._checkpoint_store.save(run_id, create_checkpoint(state))
+                    self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
                     self._checkpoint_store.update_status(run_id, RunStatus.COMPLETED)
                     return state.generated_answer
 
@@ -406,20 +493,20 @@ class AgenticRAG():
 
                 state.stage = RAGStage.GAPS_PROCESSED
                 # Save checkpoint after GAPS_PROCESSED
-                self._checkpoint_store.save(run_id, create_checkpoint(state))
+                self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
 
                 # Generate final context
                 self._select_final_evidence(state, observer)
                 state.stage = RAGStage.FINAL_EVIDENCE_READY
 
                 # Save checkpoint after FINAL_EVIDENCE_READY
-                self._checkpoint_store.save(run_id, create_checkpoint(state))
+                self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
 
-                self._generate_gap_round(state, observer)
+                self._generate_gap_round(state, observer, on_answer_delta, on_generation_started)
                 state.stage = RAGStage.GAP_GENERATION_COMPLETED
 
                 # Save checkpoint after GAP_GENERATION_COMPLETED
-                self._checkpoint_store.save(run_id, create_checkpoint(state))  
+                self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))  
 
                 print("\n========== GAP ROUND RESULT ==========")
                 print("Is complete:", state.generated_answer.is_complete)
@@ -429,7 +516,7 @@ class AgenticRAG():
             # print(gap_generation_llm_prompt if gap_generation_llm_prompt else generation_llm_prompt)
             state.stage = RAGStage.COMPLETED
 
-            self._checkpoint_store.save(run_id, create_checkpoint(state))
+            self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
             self._checkpoint_store.update_status(run_id, RunStatus.COMPLETED)
             return state.generated_answer
 

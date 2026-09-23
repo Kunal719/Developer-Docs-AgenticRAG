@@ -26,6 +26,12 @@ class CheckpointStore(Protocol):
 
     def heartbeat(self, run_id: str) -> None:
         ...
+
+    def interrupt_stale_runs(self, stale_after_seconds: int) -> list[str]:
+        ...
+
+    def resume_run(self, run_id: str) -> None:
+        ...
         
 class InMemoryCheckpointStore:
     def __init__(self):

@@ -1,34 +1,43 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.schemas.query import QueryRequest
+from app.auth.dependencies import get_current_user
 
 import json
+from dataclasses import asdict
 
 router = APIRouter()
 
 @router.post("/runs")
-def create_run(request: Request, query_request: QueryRequest):
+def create_run(request: Request, query_request: QueryRequest, user_id: str = Depends(get_current_user)):
     rag_service = request.app.state.rag_service
 
-    result = rag_service.run(query_request.question)
+    def event_stream():
+        for event in rag_service.run(query_request.question, user_id):
+            yield(
+                f"data: {json.dumps(asdict(event))}\n\n"
+            )
 
-    return {
-        "run_id": result.run_id,
-        "answer": result.answer.model_dump(),
-    }
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 @router.get("/runs")
-def list_runs(request: Request):
+def list_runs(request: Request, user_id: str = Depends(get_current_user)):
     rag_service = request.app.state.rag_service
 
-    return rag_service.list_runs()
+    return rag_service.list_runs(user_id)
 
 @router.get("/runs/{run_id}")
-def get_run_status(request: Request, run_id: str):
+def get_run_status(request: Request, run_id: str, user_id: str = Depends(get_current_user)):
     rag_service = request.app.state.rag_service
 
-    status = rag_service.get_run_status(run_id)
+    try:
+        status = rag_service.get_run_status(run_id, user_id)
+    except KeyError:
+        raise HTTPException(
+            status_code= 404,
+            detail="Run not found"
+        )
 
     return {
         "run_id": run_id,
@@ -37,15 +46,24 @@ def get_run_status(request: Request, run_id: str):
 
 
 @router.post("/runs/{run_id}/resume")
-def resume_run(request: Request, run_id: str):
+def resume_run(request: Request, run_id: str, user_id: str = Depends(get_current_user)):
     rag_service = request.app.state.rag_service
 
-    result = rag_service.resume(run_id)
+    try:
+        _ = rag_service.get_run_status(run_id, user_id)
+    except KeyError:
+        raise HTTPException(
+            status_code= 404,
+            detail="Run not found"
+        )
 
-    return {
-        "run_id": result.run_id,
-        "answer": result.answer.model_dump(),
-    }
+    def event_stream():
+        for event in rag_service.resume(run_id, user_id):
+            yield(
+                f"data: {json.dumps(asdict(event))}\n\n"
+            )
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 

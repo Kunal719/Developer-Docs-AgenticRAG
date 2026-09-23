@@ -18,13 +18,6 @@ class RAGStage(str, Enum):
     GAP_GENERATION_COMPLETED = "gap_generation_completed"
     COMPLETED = "completed"
 
-class RunStatus(str, Enum):
-    CREATED = "created"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    INTERRUPTED = "interrupted"
-
 
 @dataclass
 class RAGState:

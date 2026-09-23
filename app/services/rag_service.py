@@ -1,7 +1,10 @@
 from uuid import uuid4
-
 from dotenv import load_dotenv
 from dataclasses import dataclass
+from collections.abc import Iterator
+from queue import Queue
+from threading import Thread
+from typing import Literal
 
 from ingestion.embedding_model import get_embedding_model
 from ingestion.markdown_parser import load_documents, load_selected_documents
@@ -27,6 +30,7 @@ from reranking.cross_encoder import CrossEncoderReranker
 from router.query_router import QueryRouter
 
 from checkpoint.database import create_connection_pool
+from checkpoint.store import CheckpointStore
 from checkpoint.postgres_store import PostgresCheckpointStore
 from checkpoint.resolver import ChromaEvidenceResolver
 from checkpoint.models import RunStatus
@@ -34,8 +38,8 @@ from checkpoint.models import RunStatus
 from evidence.rerank_selector import RerankEvidenceSelector
 
 from app.llm import get_llm
+from app.auth.user_store import UserStore
 
-from models.query_input import QueryInput
 from models.generation import GeneratedAnswer
 from checkpoint.models import RunStatus
 
@@ -76,11 +80,18 @@ class RAGRunResult:
     run_id: str
     answer: GeneratedAnswer
 
+@dataclass
+class RAGStreamEvent:
+    type: Literal["run_started", "run_resumed", "generation_started", "answer_delta", "completed", "error"]
+    run_id: str
+    data: str | None = None
+    generation_round: int | None = None
+
 
 class RAGService:
     def __init__(self):
         self._agentic_rag: AgenticRAG | None = None
-        self._checkpoint_store: PostgresCheckpointStore | None = None
+        self._checkpoint_store: CheckpointStore | None = None
 
     def initialize(self) -> None:
         embedding_model = get_embedding_model()
@@ -190,6 +201,10 @@ class RAGService:
         checkpoint_pool = create_connection_pool()
         checkpoint_store = PostgresCheckpointStore(checkpoint_pool)
 
+        # User store
+
+
+
         evidence_resolver = ChromaEvidenceResolver(
             doc_store=doc_vector_store,
             code_store=code_vector_store,
@@ -228,6 +243,7 @@ class RAGService:
         self._code_vector_store = code_vector_store
         self._evidence_selector = evidence_selector
         self._checkpoint_store = checkpoint_store
+        self._user_store = UserStore(self.checkpoint_store.pool)
         self._evidence_resolver = evidence_resolver
 
         self._agentic_rag = AgenticRAG(
@@ -250,61 +266,224 @@ class RAGService:
 
         return self._agentic_rag
 
-    def run(self, question: str) -> RAGRunResult:
+    @property
+    def checkpoint_store(self) -> PostgresCheckpointStore:
+        if self._checkpoint_store is None:
+            raise RuntimeError("Checkpoint store is not initialized")
+
+        return self._checkpoint_store
+
+    @property
+    def user_store(self) -> UserStore:
+        if self._user_store is None:
+            raise RuntimeError("User store is not initialized")
+
+        return self._user_store
+
+    def run(self, question: str, user_id: str) -> Iterator[RAGStreamEvent]:
         agentic_rag = self._require_initialized()
 
         run_id = uuid4().hex
         query_input = self._input_normalizer.normalize(question)
 
-        try:
-            answer = agentic_rag.run(
-                query_input=query_input,
-                run_id=run_id,
+        answer_queue: Queue[RAGStreamEvent | None] = Queue()
+
+        current_generation_round = 0
+
+        def on_generation_started(round_number: int) -> None:
+            nonlocal current_generation_round
+            current_generation_round = round_number
+
+            answer_queue.put(
+                RAGStreamEvent(
+                    type="generation_started",
+                    run_id=run_id,
+                    generation_round=round_number
+                )
             )
 
-        except Exception as e:
+        def on_answer_delta(delta: str) -> None:
+            answer_queue.put(
+                RAGStreamEvent(
+                    type="answer_delta",
+                    run_id=run_id,
+                    data=delta,
+                    generation_round=current_generation_round
+                )
+            )
+
+        def run_agent() -> None:
             try:
-                self._checkpoint_store.update_status(run_id, RunStatus.FAILED, str(e))
-            except KeyError:
-                # If the checkpoint is not found, this is a new run. We can ignore this.
-                pass
+                agentic_rag.run(
+                    query_input=query_input,
+                    run_id=run_id,
+                    user_id=user_id,
+                    on_answer_delta=on_answer_delta,
+                    on_generation_started=on_generation_started
+                )
 
-            raise
+                answer_queue.put(
+                    RAGStreamEvent(
+                        type="run_completed",
+                        run_id=run_id
+                    )
+                )
 
-        return RAGRunResult(run_id=run_id, answer=answer)
+            except Exception as e:
+                try:
+                    self._checkpoint_store.update_status(run_id, RunStatus.FAILED, str(e))
+                except KeyError:
+                    # If the checkpoint is not found, this is a new run. We can ignore this.
+                    pass
 
-    def resume(self, run_id: str) -> RAGRunResult:
+                answer_queue.put(
+                    RAGStreamEvent(
+                        type="error",
+                        run_id=run_id,
+                        data=str(e)
+                    )
+                )
+
+            finally:
+                answer_queue.put(None)
+
+
+        answer_queue.put(
+            RAGStreamEvent(
+                type="run_started",
+                run_id=run_id
+            )
+        )
+
+        worker = Thread(
+            target=run_agent,
+            daemon=True
+        )
+        worker.start()
+
+        while True:
+            item = answer_queue.get()
+
+            if item is None:
+                break
+
+            yield item
+
+     
+
+    def resume(self, run_id: str, user_id: str) -> Iterator[RAGStreamEvent]:
         agentic_rag = self._require_initialized()
 
         checkpoint_store = self._checkpoint_store
         if checkpoint_store is None:
             raise RuntimeError("Checkpoint store is not initialized")
 
-        checkpoint = checkpoint_store.load(run_id)
+        checkpoint = checkpoint_store.load(run_id, user_id)
+        status = self._checkpoint_store.get_status(run_id)
 
-        answer = agentic_rag.run(
-            query_input=checkpoint.query_input,
-            run_id=run_id,
-            resume=True,
+        if status != RunStatus.INTERRUPTED:
+            raise ValueError(f"Run {run_id} cannot be resumed from status {status.value}")
+
+        answer_queue: Queue[RAGStreamEvent | None] = Queue()
+
+        # Get current generation round
+        current_generation_round = checkpoint.generation_round
+
+        def on_generation_started(round_number: int) -> None:
+            nonlocal current_generation_round
+            current_generation_round = round_number
+
+            answer_queue.put(
+                RAGStreamEvent(
+                    type="generation_started",
+                    run_id=run_id,
+                    generation_round=round_number
+                )
+            )
+
+        def on_answer_delta(delta: str) -> None:
+            answer_queue.put(
+                RAGStreamEvent(
+                    type="answer_delta",
+                    run_id=run_id,
+                    data=delta,
+                    generation_round=current_generation_round
+                )
+            )
+
+        def run_agent() -> None:
+ 
+            try:
+                agentic_rag.run(
+                    query_input=checkpoint.query_input,
+                    run_id=run_id,
+                    user_id=user_id,
+                    resume=True,
+                    on_answer_delta=on_answer_delta,
+                    on_generation_started=on_generation_started
+                )
+
+                answer_queue.put(
+                    RAGStreamEvent(
+                        type="run_completed",
+                        run_id=run_id
+                    )
+                )
+
+            except Exception as e:
+                try:
+                    self.checkpoint_store.update_status(run_id, RunStatus.FAILED, str(e))
+                except KeyError:
+                    pass
+
+                answer_queue.put(
+                    RAGStreamEvent(
+                        type="error",
+                        run_id=run_id,
+                        data=str(e)
+                    )
+                )
+
+            finally:
+                answer_queue.put(None)
+
+        answer_queue.put(
+            RAGStreamEvent(
+                type="run_resumed",
+                run_id=run_id
+            )
         )
 
-        return RAGRunResult(run_id=run_id, answer=answer)
+        worker = Thread(
+            target=run_agent,
+            daemon=True
+        )
 
-    def get_run_status(self, run_id: str) -> RunStatus:
+        worker.start()
+
+        while True:
+            item = answer_queue.get()
+
+            if item is None:
+                break
+
+            yield item
+
+    def get_run_status(self, run_id: str, user_id: str) -> RunStatus:
         checkpoint_store = self._checkpoint_store
 
         if checkpoint_store is None:
             raise RuntimeError("Checkpoint store is not initialized")
 
-        return checkpoint_store.get_status(run_id)
+        return checkpoint_store.get_status(run_id, user_id)
 
-    def list_runs(self) -> list[dict]:
+    def list_runs(self, user_id: str) -> list[dict]:
         checkpoint_store = self._checkpoint_store
 
         if checkpoint_store is None:
             raise RuntimeError("Checkpoint store is not initialized")
 
-        return checkpoint_store.list_runs()
+        return checkpoint_store.list_runs(user_id)
 
 
 if __name__ == "__main__":
