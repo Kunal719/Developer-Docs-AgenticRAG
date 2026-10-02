@@ -347,6 +347,9 @@ class AgenticRAG():
             checkpoint = self._checkpoint_store.load(run_id, user_id)
             state = restore_state(checkpoint, self._evidence_resolver)
 
+            if state.stage == RAGStage.INITIALIZED:
+                state.query_input = query_input
+
             logger.info(
                 "Resuming run %s from stage=%s, generation_round=%s.",
                 run_id,
@@ -354,7 +357,7 @@ class AgenticRAG():
                 state.generation_round,
             )
 
-            self._checkpoint_store.resume_run(run_id, user_id)
+            # self._checkpoint_store.resume_run(run_id, user_id)
         else: 
             state = RAGState(query_input=query_input)
             # Get retrieval plan
@@ -362,7 +365,7 @@ class AgenticRAG():
             state.stage = RAGStage.ROUTED
 
             # Save checkpoint after ROUTED
-            self._checkpoint_store.create_run(run_id, user_id, create_checkpoint(state))
+            self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
 
             if observer is not None:
                 observer.record_retrieval_plan(state.retrieval_plan)
@@ -378,6 +381,16 @@ class AgenticRAG():
 
         try: 
 
+            if state.stage == RAGStage.INITIALIZED:
+                state.retrieval_plan = self._query_router.route(query=state.query_input, observer=observer)
+                state.stage = RAGStage.ROUTED
+
+                self._checkpoint_store.save(
+                    run_id,
+                    user_id,
+                    create_checkpoint(state),
+                )
+
             if state.stage == RAGStage.ROUTED:
                 logger.info(
                     "Run %s continuing from ROUTED, executing initial retrieval.",
@@ -390,7 +403,7 @@ class AgenticRAG():
                 self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
 
             if state.stage == RAGStage.INITIAL_EVIDENCE_READY:
-                logger.warning(
+                logger.info(
                     "Run %s continuing from INITIAL_EVIDENCE_READY, starting initial generation.",
                     run_id,
                 )

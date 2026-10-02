@@ -6,10 +6,48 @@ import time
 import requests
 import streamlit as st
 
+st.write("Browser cookies:", st.context.cookies)
 
-API_URL = "http://127.0.0.1:8000/query"
-HEALTH_URL = "http://127.0.0.1:8000/health"
 
+API_BASE_URL = "http://127.0.0.1:8000"
+
+API_URL = f"{API_BASE_URL}/runs"
+HEALTH_URL = f"{API_BASE_URL}/health"
+GOOGLE_LOGIN_URL = f"{API_BASE_URL}/auth/google/login"
+
+
+def get_api_session() -> requests.Session:
+    """
+    Create an HTTP session for FastAPI requests and forward
+    the browser's FastAPI session cookie.
+    """
+    session = requests.Session()
+
+    session_cookie = st.context.cookies.get("fastapi-session")
+
+    if session_cookie:
+        session.cookies.set(
+            "fastapi-session",
+            session_cookie,
+            domain="127.0.0.1",
+            path="/",
+        )
+
+    return session
+
+def get_runs():
+    response = api_session.get(f"{API_BASE_URL}/runs", timeout=5)
+
+    response.raise_for_status()
+
+    return response.json()
+
+def get_run(run_id):
+    response = api_session.get(f"{API_BASE_URL}/runs/{run_id}", timeout=5)
+
+    response.raise_for_status()
+    
+    return response.json()
 
 def check_backend() -> bool:
     try:
@@ -440,6 +478,34 @@ st.markdown(
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+
+# if "session" not in st.context.cookies:
+#     st.info("Please sign in to use the Developer Docs Assistant.")
+
+#     st.link_button(
+#         "Sign in with Google",
+#         GOOGLE_LOGIN_URL,
+#         use_container_width=True,
+#     )
+
+#     st.stop()
+
+if not st.context.cookies.get("fastapi-session"):
+    st.info("Please sign in to use the Developer Docs Assistant.")
+
+    st.link_button(
+        "Sign in with Google",
+        GOOGLE_LOGIN_URL,
+        use_container_width=True,
+    )
+
+    st.stop()
+
+# Create API session
+api_session = get_api_session()
 
 # ---------------------------------------------------------------------------
 # Sidebar
@@ -474,6 +540,34 @@ with st.sidebar:
     ):
         st.session_state.messages = []
         st.rerun()
+
+    # -----------------------------------------------------------------------
+    # Recent conversations
+    # -----------------------------------------------------------------------
+
+    st.markdown(
+        '<div class="sidebar-section">Recent conversations</div>',
+        unsafe_allow_html=True,
+    )
+
+    runs = get_runs()
+
+    for run in runs:
+        question = run["question"]
+
+        words = question.split()
+        label = " ".join(words[:5])
+
+        if len(words) > 5:
+            label += "..."
+
+        if st.button(
+            label,
+            key=f"run_{run['run_id']}",
+            use_container_width=True,
+        ):
+            st.session_state.selected_run_id = run["run_id"]
+            st.rerun()
 
     # -----------------------------------------------------------------------
     # System
@@ -926,6 +1020,23 @@ with st.sidebar:
         """
     )
 
+selected_run_id = st.session_state.get("selected_run_id")
+
+if selected_run_id:
+    selected_run = get_run(selected_run_id)
+
+    state = selected_run["current_state"]
+
+    st.session_state.messages = [
+        {
+            "role": "user",
+            "content": state["question"],
+        },
+        {
+            "role": "assistant",
+            "content": state["generated_answer"],
+        },
+    ]
 
 # ---------------------------------------------------------------------------
 # Main header
@@ -1153,16 +1264,28 @@ if question:
             """
 
             try:
-                with requests.post(
+                with api_session.post(
                     API_URL,
                     json={"question": question},
                     stream=True,
                     timeout=(10, 300),
                 ) as response:
+                                        
+                    if response.status_code == 429:
+                        data = response.json()
+
+                        event_queue.put(
+                            (
+                                "error",
+                                data.get(
+                                    "detail",
+                                    "Question limit reached."
+                                )
+                            )
+                        )
+                        return
 
                     response.raise_for_status()
-
-                    event_type = None
 
                     for line in response.iter_lines(
                         decode_unicode=True
@@ -1171,21 +1294,11 @@ if question:
                         if not line:
                             continue
 
-                        if line.startswith("event:"):
-                            event_type = line[
-                                len("event:"):
-                            ].strip()
-
-                        elif line.startswith("data:"):
-
-                            data = json.loads(
-                                line[
-                                    len("data:"):
-                                ].strip()
-                            )
+                        if line.startswith("data:"):
+                            data = json.loads(line[len("data:"):].strip())
 
                             event_queue.put(
-                                (event_type, data)
+                                (data.get("type"), data)
                             )
 
                 # Tell the UI that the stream has finished.
@@ -1249,6 +1362,7 @@ if question:
         first_token_received = False
         stream_finished = False
         stream_error = None
+        run_accepted = False
 
         while not first_token_received and not stream_finished:
 
@@ -1266,20 +1380,34 @@ if question:
                 message_index + 1
             ) % len(waiting_messages)
 
-            # Keep changing the message while the backend is processing.
             deadline = time.time() + 0.8
 
             while time.time() < deadline:
 
                 try:
-                    event_type, data = (
-                        event_queue.get_nowait()
-                    )
+                    event_type, data = event_queue.get_nowait()
 
-                    if event_type == "token":
+                    if event_type == "run_started":
+                        run_accepted = True
+                        st.session_state.current_run_id = (
+                            data["run_id"]
+                        )
+
+                    elif event_type == "run_resumed":
+
+                        st.session_state.current_run_id = (
+                            data["run_id"]
+                        )
+
+                    elif event_type == "generation_started":
+
+                        pass
+
+                    elif event_type == "answer_delta":
 
                         first_token_received = True
-                        answer += data
+
+                        answer += data["data"]
 
                         status_placeholder.empty()
 
@@ -1289,24 +1417,29 @@ if question:
 
                         break
 
-                    elif event_type == "sources":
-
-                        sources = data
-
-                    elif event_type == "done":
+                    elif event_type == "run_completed":
 
                         stream_finished = True
                         break
 
                     elif event_type == "error":
 
-                        stream_error = data
+                        if isinstance(data, dict):
+                            stream_error = data.get(
+                                "data",
+                                "RAG run failed."
+                            )
+
+                        else:
+                            stream_error = str(data)
+
                         stream_finished = True
                         break
 
                 except queue.Empty:
 
                     time.sleep(0.05)
+
 
         # -------------------------------------------------------------------
         # Continue consuming the answer after first token
@@ -1316,31 +1449,38 @@ if question:
 
             try:
 
-                event_type, data = (
-                    event_queue.get(
-                        timeout=0.1
-                    )
+                event_type, data = event_queue.get(
+                    timeout=0.1
                 )
 
-                if event_type == "token":
+                if event_type == "run_started":
+                    run_accepted = True
+                    st.session_state.current_run_id = data["run_id"]
 
-                    answer += data
+
+                if event_type == "answer_delta":
+
+                    answer += data["data"]
 
                     response_placeholder.markdown(
                         answer
                     )
 
-                elif event_type == "sources":
-
-                    sources = data
-
-                elif event_type == "done":
+                elif event_type == "run_completed":
 
                     stream_finished = True
 
                 elif event_type == "error":
 
-                    stream_error = data
+                    if isinstance(data, dict):
+                        stream_error = data.get(
+                            "data",
+                            "RAG run failed."
+                        )
+
+                    else:
+                        stream_error = str(data)
+
                     stream_finished = True
 
             except queue.Empty:
@@ -1410,3 +1550,6 @@ if question:
                 "sources": sources,
             }
         )
+
+        if run_accepted:
+            st.rerun()

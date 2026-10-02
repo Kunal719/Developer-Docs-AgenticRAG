@@ -13,8 +13,17 @@ router = APIRouter()
 def create_run(request: Request, query_request: QueryRequest, user_id: str = Depends(get_current_user)):
     rag_service = request.app.state.rag_service
 
+    try:
+        run_id = rag_service.create_run(query_request.question, user_id)
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=429,
+            detail=str(e)
+        )
+
     def event_stream():
-        for event in rag_service.run(query_request.question, user_id):
+        for event in rag_service.run(query_request.question, user_id, run_id):
             yield(
                 f"data: {json.dumps(asdict(event))}\n\n"
             )
@@ -33,6 +42,7 @@ def get_run_status(request: Request, run_id: str, user_id: str = Depends(get_cur
 
     try:
         status = rag_service.get_run_status(run_id, user_id)
+        current_state = rag_service.get_run_state(run_id, user_id)
     except KeyError:
         raise HTTPException(
             status_code= 404,
@@ -41,7 +51,17 @@ def get_run_status(request: Request, run_id: str, user_id: str = Depends(get_cur
 
     return {
         "run_id": run_id,
-        "status": status
+        "status": status,
+        "current_state": {
+            "question": current_state.query_input.question,
+            "stage": current_state.stage,
+            "generation_round": current_state.generation_round,
+            "generated_answer": (
+                current_state.generated_answer.answer
+                if current_state.generated_answer
+                else None
+            )
+        }
     }
 
 

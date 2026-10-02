@@ -43,6 +43,7 @@ app = FastAPI(title="Developer Docs RAG", lifespan=lifespan)
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.environ["SESSION_SECRET_KEY"],
+    session_cookie="fastapi-session",
     https_only=False,
     same_site='lax'
 )

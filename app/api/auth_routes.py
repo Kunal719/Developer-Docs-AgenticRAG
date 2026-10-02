@@ -63,6 +63,7 @@ def google_callback(request: Request):
     request.session.pop("google_oauth_state", None)
     request.session.pop("google_code_verifier", None)
 
-    return {
-        "message": "Authentication Successful"
-    }
+    return  RedirectResponse(
+        url="http://127.0.0.1:8501",
+        status_code=303,
+    )

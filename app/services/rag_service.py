@@ -27,6 +27,9 @@ from retrieval.multi_query_retrieval_strategy import MultiQueryRetrievalStrategy
 
 from reranking.cross_encoder import CrossEncoderReranker
 
+from models.query_input import QueryInput
+from models.rag_state import RAGState, RAGStage
+
 from router.query_router import QueryRouter
 
 from checkpoint.database import create_connection_pool
@@ -34,6 +37,7 @@ from checkpoint.store import CheckpointStore
 from checkpoint.postgres_store import PostgresCheckpointStore
 from checkpoint.resolver import ChromaEvidenceResolver
 from checkpoint.models import RunStatus
+from checkpoint.serialization import create_checkpoint, restore_state
 
 from evidence.rerank_selector import RerankEvidenceSelector
 
@@ -82,7 +86,7 @@ class RAGRunResult:
 
 @dataclass
 class RAGStreamEvent:
-    type: Literal["run_started", "run_resumed", "generation_started", "answer_delta", "completed", "error"]
+    type: Literal["run_started", "run_resumed", "generation_started", "answer_delta", "run_completed", "error"]
     run_id: str
     data: str | None = None
     generation_round: int | None = None
@@ -280,11 +284,20 @@ class RAGService:
 
         return self._user_store
 
-    def run(self, question: str, user_id: str) -> Iterator[RAGStreamEvent]:
-        agentic_rag = self._require_initialized()
-
+    def create_run(self, question: str, user_id: str) -> str:
         run_id = uuid4().hex
-        query_input = self._input_normalizer.normalize(question)
+        initial_query_input = QueryInput(question=question)
+
+        self.checkpoint_store.create_run(
+            run_id=run_id,
+            user_id=user_id,
+            checkpoint=create_checkpoint(RAGState(query_input=initial_query_input))
+        )
+
+        return run_id
+    
+    def run(self, question: str, user_id: str, run_id: str) -> Iterator[RAGStreamEvent]:
+        agentic_rag = self._require_initialized()
 
         answer_queue: Queue[RAGStreamEvent | None] = Queue()
 
@@ -314,6 +327,7 @@ class RAGService:
 
         def run_agent() -> None:
             try:
+                query_input = self._input_normalizer.normalize(question)
                 agentic_rag.run(
                     query_input=query_input,
                     run_id=run_id,
@@ -331,7 +345,7 @@ class RAGService:
 
             except Exception as e:
                 try:
-                    self._checkpoint_store.update_status(run_id, RunStatus.FAILED, str(e))
+                    self.checkpoint_store.update_status(run_id, RunStatus.FAILED, str(e))
                 except KeyError:
                     # If the checkpoint is not found, this is a new run. We can ignore this.
                     pass
@@ -374,15 +388,16 @@ class RAGService:
     def resume(self, run_id: str, user_id: str) -> Iterator[RAGStreamEvent]:
         agentic_rag = self._require_initialized()
 
-        checkpoint_store = self._checkpoint_store
-        if checkpoint_store is None:
+        if self.checkpoint_store is None:
             raise RuntimeError("Checkpoint store is not initialized")
 
-        checkpoint = checkpoint_store.load(run_id, user_id)
-        status = self._checkpoint_store.get_status(run_id)
+        checkpoint = self.checkpoint_store.load(run_id, user_id)
+        status = self.checkpoint_store.get_status(run_id, user_id)
 
         if status != RunStatus.INTERRUPTED:
             raise ValueError(f"Run {run_id} cannot be resumed from status {status.value}")
+
+        self.checkpoint_store.resume_run(run_id, user_id)
 
         answer_queue: Queue[RAGStreamEvent | None] = Queue()
 
@@ -412,8 +427,10 @@ class RAGService:
             )
 
         def run_agent() -> None:
- 
             try:
+                if checkpoint.stage == RAGStage.INITIALIZED:
+                    checkpoint.query_input = self._input_normalizer.normalize(checkpoint.query_input.question)
+
                 agentic_rag.run(
                     query_input=checkpoint.query_input,
                     run_id=run_id,
@@ -469,21 +486,17 @@ class RAGService:
 
             yield item
 
+    def get_run_state(self, run_id: str, user_id: str) -> RAGState:
+        checkpoint = self.checkpoint_store.load(run_id, user_id)
+
+        # Restore state
+        return restore_state(checkpoint, self._evidence_resolver)
+
     def get_run_status(self, run_id: str, user_id: str) -> RunStatus:
-        checkpoint_store = self._checkpoint_store
-
-        if checkpoint_store is None:
-            raise RuntimeError("Checkpoint store is not initialized")
-
-        return checkpoint_store.get_status(run_id, user_id)
+        return self.checkpoint_store.get_status(run_id, user_id)
 
     def list_runs(self, user_id: str) -> list[dict]:
-        checkpoint_store = self._checkpoint_store
-
-        if checkpoint_store is None:
-            raise RuntimeError("Checkpoint store is not initialized")
-
-        return checkpoint_store.list_runs(user_id)
+        return self.checkpoint_store.list_runs(user_id)
 
 
 if __name__ == "__main__":

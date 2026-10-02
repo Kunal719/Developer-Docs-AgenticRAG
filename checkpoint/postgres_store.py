@@ -34,8 +34,8 @@ class PostgresCheckpointStore:
 
             active_run_count = result.fetchone()[0]
 
-            if active_run_count >= 3:
-                raise ValueError("You have reached the maximum of 3 questions within the last 24 hours")
+            if active_run_count >= 5:
+                raise ValueError("You have reached the maximum of 5 questions within the last 24 hours")
 
             conn.execute(
                 """
@@ -147,7 +147,8 @@ class PostgresCheckpointStore:
                 """
                 SELECT
                     run_id,
-                    status,
+                    checkpoint -> 'query_input' ->> 'question' as question,
+                    status, 
                     updated_at,
                     completed_at,
                     error
@@ -161,10 +162,11 @@ class PostgresCheckpointStore:
         return [
             {
                 "run_id": row[0],
-                "status": RunStatus(row[1]),
-                "updated_at": row[2],
-                "completed_at": row[3],
-                "error": row[4],
+                "question": row[1],
+                "status": RunStatus(row[2]),
+                "updated_at": row[3],
+                "completed_at": row[4],
+                "error": row[5],
             }
             for row in rows
         ]
