@@ -4,6 +4,8 @@ from fastapi.responses import StreamingResponse
 from app.schemas.query import QueryRequest
 from app.auth.dependencies import get_current_user
 
+from checkpoint.models import RunStatus
+
 import json
 from dataclasses import asdict
 
@@ -42,7 +44,32 @@ def get_run_status(request: Request, run_id: str, user_id: str = Depends(get_cur
 
     try:
         status = rag_service.get_run_status(run_id, user_id)
-        current_state = rag_service.get_run_state(run_id, user_id)
+        checkpoint = rag_service.get_run_checkpoint(run_id, user_id)
+
+        if status == RunStatus.COMPLETED:
+            current_state = {
+                "question": checkpoint.original_question,
+                "stage": checkpoint.stage,
+                "generation_round": checkpoint.generation_round,
+                "generated_answer": (
+                    checkpoint.generated_answer.answer
+                    if checkpoint.generated_answer
+                    else None
+                ),
+            }
+        else:
+            state = rag_service.get_run_state(run_id, user_id)
+            current_state = {
+                "question": state.original_question,
+                "stage": state.stage,
+                "generation_round": state.generation_round,
+                "generated_answer": (
+                    state.generated_answer.answer
+                    if state.generated_answer
+                    else None
+                ),
+            }
+
     except KeyError:
         raise HTTPException(
             status_code= 404,
@@ -52,16 +79,7 @@ def get_run_status(request: Request, run_id: str, user_id: str = Depends(get_cur
     return {
         "run_id": run_id,
         "status": status,
-        "current_state": {
-            "question": current_state.query_input.question,
-            "stage": current_state.stage,
-            "generation_round": current_state.generation_round,
-            "generated_answer": (
-                current_state.generated_answer.answer
-                if current_state.generated_answer
-                else None
-            )
-        }
+        "current_state": current_state
     }
 
 

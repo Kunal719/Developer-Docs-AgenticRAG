@@ -4,12 +4,45 @@ services:
     container_name: developer_docs_rag_postgres
     environment:
       POSTGRES_USER: rag_user
-      POSTGRES_PASSWORD: rag_password2
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: developer_docs_rag
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_user -d developer_docs_rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile.fastapi
+    container_name: developer_docs_rag_api
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: developer_docs_rag_ui
+    env_file:
+      - .env
+    ports:
+      - "8501:8501"
+    depends_on:
+      - fastapi
+    environment:
+      API_BASE_URL: http://fastapi:8000
+      GOOGLE_LOGIN_URL: http://127.0.0.1:8000/auth/google/login
 
 volumes:
   postgres_data:

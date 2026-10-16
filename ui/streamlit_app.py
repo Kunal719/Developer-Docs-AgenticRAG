@@ -2,18 +2,18 @@ import json
 import queue
 import threading
 import time
+import os
 
 import requests
 import streamlit as st
 
-st.write("Browser cookies:", st.context.cookies)
 
-
-API_BASE_URL = "http://127.0.0.1:8000"
+API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
 
 API_URL = f"{API_BASE_URL}/runs"
 HEALTH_URL = f"{API_BASE_URL}/health"
-GOOGLE_LOGIN_URL = f"{API_BASE_URL}/auth/google/login"
+
+GOOGLE_LOGIN_URL = os.getenv("GOOGLE_LOGIN_URL", f"{API_BASE_URL}/auth/google/login")
 
 
 def get_api_session() -> requests.Session:
@@ -29,7 +29,6 @@ def get_api_session() -> requests.Session:
         session.cookies.set(
             "fastapi-session",
             session_cookie,
-            domain="127.0.0.1",
             path="/",
         )
 
@@ -45,9 +44,18 @@ def get_runs():
 def get_run(run_id):
     response = api_session.get(f"{API_BASE_URL}/runs/{run_id}", timeout=5)
 
+    if response.status_code == 404:
+        return None
+    
     response.raise_for_status()
     
     return response.json()
+
+def api_unavailable_message():
+    st.error(
+        "The RAG backend is currently unavailable. "
+        "Please make sure the FastAPI server is running and try again."
+    )
 
 def check_backend() -> bool:
     try:
@@ -478,6 +486,24 @@ st.markdown(
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+if "selected_run_id" not in st.session_state:
+    st.session_state.selected_run_id = st.query_params.get("run_id")
+
+if "loaded_run_id" not in st.session_state:
+    st.session_state.loaded_run_id = None
+
+if "current_run_id" not in st.session_state:
+    st.session_state.current_run_id = None
+
+if "current_run_question" not in st.session_state:
+    st.session_state.current_run_question = None
+
+if "backend_online" not in st.session_state:
+    st.session_state.backend_online = False
+
+if "resume_run_id" not in st.session_state:
+    st.session_state.resume_run_id = None
+
 # ---------------------------------------------------------------------------
 # Authentication
 # ---------------------------------------------------------------------------
@@ -539,35 +565,10 @@ with st.sidebar:
         use_container_width=True,
     ):
         st.session_state.messages = []
+        st.session_state.selected_run_id = None
+        st.query_params.clear()
+        st.session_state.loaded_run_id = None
         st.rerun()
-
-    # -----------------------------------------------------------------------
-    # Recent conversations
-    # -----------------------------------------------------------------------
-
-    st.markdown(
-        '<div class="sidebar-section">Recent conversations</div>',
-        unsafe_allow_html=True,
-    )
-
-    runs = get_runs()
-
-    for run in runs:
-        question = run["question"]
-
-        words = question.split()
-        label = " ".join(words[:5])
-
-        if len(words) > 5:
-            label += "..."
-
-        if st.button(
-            label,
-            key=f"run_{run['run_id']}",
-            use_container_width=True,
-        ):
-            st.session_state.selected_run_id = run["run_id"]
-            st.rerun()
 
     # -----------------------------------------------------------------------
     # System
@@ -582,6 +583,13 @@ with st.sidebar:
     def backend_status():
 
         backend_online = check_backend()
+
+        previous_status = st.session_state.backend_online
+
+        st.session_state.backend_online = backend_online
+
+        if backend_online != previous_status:
+            st.rerun(scope="app")
 
         if backend_online:
             status_dot = "online"
@@ -650,13 +658,55 @@ with st.sidebar:
     backend_status()
 
     # -----------------------------------------------------------------------
-    # Architecture
+    # Recent conversations
     # -----------------------------------------------------------------------
 
     st.markdown(
-        '<div class="sidebar-section">Architecture</div>',
+        '<div class="sidebar-section">Recent conversations</div>',
         unsafe_allow_html=True,
     )
+
+    if st.session_state.backend_online:
+        runs = get_runs()
+    else:
+        runs = []
+
+    current_run_id = st.session_state.current_run_id
+
+    if (current_run_id and current_run_id not in {run["run_id"] for run in runs}):
+        runs.insert(
+            0,
+            {
+                "run_id": current_run_id,
+                "question": st.session_state.current_run_question,
+                "status": "running",
+            },
+        )
+
+    for run in runs:
+        question_text = run["question"]
+        words = question_text.split()
+
+        label = " ".join(words[:5])
+
+        if len(words) > 5:
+            label += "..."
+
+        if run["status"] == "running":
+            label = "⏳ " + label
+        elif run["status"] == "interrupted":
+            label = "⚠️ " + label
+        elif run["status"] == "failed":
+            label = "❌ " + label
+
+        if st.button(
+            label,
+            key=f"run_{run['run_id']}",
+            use_container_width=True,
+        ):
+            st.session_state.selected_run_id = run["run_id"]
+            st.query_params["run_id"] = run["run_id"]
+            st.rerun()
 
     # -----------------------------------------------------------------------
     # Runtime Pipeline
@@ -1020,23 +1070,60 @@ with st.sidebar:
         """
     )
 
+# ---------------------------------------------------------------------------
+# Selected conversation
+# ---------------------------------------------------------------------------
+
 selected_run_id = st.session_state.get("selected_run_id")
 
-if selected_run_id:
+if (
+    selected_run_id
+    and selected_run_id != st.session_state.loaded_run_id
+):
     selected_run = get_run(selected_run_id)
 
+    if selected_run is None:
+        st.warning("Run not found or you don't have access to it.")
+        st.session_state.selected_run_id = None
+        st.session_state.loaded_run_id = None
+        st.query_params.clear()
+        st.stop()
+
     state = selected_run["current_state"]
+    status = selected_run["status"]
 
     st.session_state.messages = [
         {
             "role": "user",
             "content": state["question"],
-        },
-        {
-            "role": "assistant",
-            "content": state["generated_answer"],
-        },
+        }
     ]
+
+    if status == "completed":
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": state["generated_answer"] or "",
+            }
+        )
+
+    elif status == "failed":
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": "This run failed.",
+            }
+        )
+
+    elif status == "interrupted":
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": "This run was interrupted. You can resume it.",
+            }
+        )
+
+    st.session_state.loaded_run_id = selected_run_id
 
 # ---------------------------------------------------------------------------
 # Main header
@@ -1059,6 +1146,145 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ---------------------------------------------------------------------------
+# Render previous messages
+# ---------------------------------------------------------------------------
+
+for message in st.session_state.messages:
+
+    with st.chat_message(message["role"]):
+
+        st.markdown(message["content"])
+
+        if message["role"] == "assistant" and message.get("sources"):
+
+            sources = message["sources"]
+
+            with st.expander(f"Sources · {len(sources)}", expanded=False):
+
+                for source in sources:
+
+                    corpus = source["corpus"].lower()
+
+                    badge_class = (
+                        "implementation"
+                        if corpus == "implementation"
+                        else "documentation"
+                    )
+
+                    badge_label = (
+                        "Implementation"
+                        if corpus == "implementation"
+                        else "Documentation"
+                    )
+
+                    st.markdown(
+                        f"""
+                        <div class="source-item">
+                            <span class="source-rank">
+                                [{source['rank']}]
+                            </span>
+                            <span class="source-path">
+                                {source['source']}
+                            </span>
+                            <span class="source-badge {badge_class}">
+                                {badge_label}
+                            </span>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+# ---------------------------------------------------------------------------
+# Monitor selected running conversation
+# ---------------------------------------------------------------------------
+
+selected_run_id = st.session_state.get("selected_run_id")
+
+if selected_run_id:
+    selected_run = get_run(selected_run_id)
+
+    if selected_run["status"] in {"running", "interrupted"}:
+
+        waiting_messages = [
+            "🔎 Digging through the docs...",
+            "🧠 Asking the codebase for answers...",
+            "🎯 Hunting down the useful bits...",
+            "🤓 Making sure I don't make things up...",
+            "📚 Consulting the documentation scrolls...",
+            "🕵️ Following the source...",
+        ]
+
+        @st.fragment(run_every="1s")
+        def monitor_running_run():
+
+            try:
+                run = get_run(selected_run_id)
+
+                if run["status"] == "running":
+
+                    message = waiting_messages[
+                        int(time.time()) % len(waiting_messages)
+                    ]
+
+                    st.markdown(
+                        f"""
+                        <div class="streaming-indicator">
+                            <span class="streaming-dot"></span>
+                            {message}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                elif run["status"] == "completed":
+
+                    state = run["current_state"]
+
+                    st.session_state.messages = [
+                        {
+                            "role": "user",
+                            "content": state["question"],
+                        },
+                        {
+                            "role": "assistant",
+                            "content": (
+                                state["generated_answer"] or ""
+                            ),
+                        },
+                    ]
+
+                    st.session_state.loaded_run_id = (
+                        selected_run_id
+                    )
+
+                    st.rerun()
+
+                elif run["status"] == "interrupted":
+
+                    st.warning(
+                        "This run was interrupted. "
+                        "You can resume it."
+                    )
+
+                    if st.button(
+                        "↻  Resume run",
+                        key=f"resume_{selected_run_id}",
+                        use_container_width=True,
+                    ):
+                        st.session_state.resume_run_id = selected_run_id
+                        st.rerun()
+
+                elif run["status"] == "failed":
+
+                    st.error("This run failed.")
+
+            except requests.exceptions.RequestException:
+                st.warning(
+                    "Unable to check the RAG run right now."
+                )
+
+        monitor_running_run()
 
 # ---------------------------------------------------------------------------
 # Empty state
@@ -1163,57 +1389,6 @@ if not st.session_state.messages:
         """
     )
 
-
-# ---------------------------------------------------------------------------
-# Render previous messages
-# ---------------------------------------------------------------------------
-
-for message in st.session_state.messages:
-
-    with st.chat_message(message["role"]):
-
-        st.markdown(message["content"])
-
-        if message["role"] == "assistant" and message.get("sources"):
-
-            sources = message["sources"]
-
-            with st.expander(f"Sources · {len(sources)}", expanded=False):
-
-                for source in sources:
-
-                    corpus = source["corpus"].lower()
-
-                    badge_class = (
-                        "implementation"
-                        if corpus == "implementation"
-                        else "documentation"
-                    )
-
-                    badge_label = (
-                        "Implementation"
-                        if corpus == "implementation"
-                        else "Documentation"
-                    )
-
-                    st.markdown(
-                        f"""
-                        <div class="source-item">
-                            <span class="source-rank">
-                                [{source['rank']}]
-                            </span>
-                            <span class="source-path">
-                                {source['source']}
-                            </span>
-                            <span class="source-badge {badge_class}">
-                                {badge_label}
-                            </span>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-
-
 # ---------------------------------------------------------------------------
 # Chat input
 # ---------------------------------------------------------------------------
@@ -1222,22 +1397,43 @@ question = st.chat_input(
     "Ask about LangGraph..."
 )
 
+resume_run_id = st.session_state.get("resume_run_id")
 
-if question:
+if question or resume_run_id:
 
-    # -----------------------------------------------------------------------
-    # User message
-    # -----------------------------------------------------------------------
+    is_resume = resume_run_id is not None
 
-    st.session_state.messages.append(
-        {
-            "role": "user",
-            "content": question,
-        }
-    )
+    if is_resume:
+        resumed_run = get_run(resume_run_id)
 
-    with st.chat_message("user"):
-        st.markdown(question)
+        question = resumed_run["current_state"]["question"]
+
+        # Rebuild the conversation for the resumed run.
+        st.session_state.messages = [
+            {
+                "role": "user",
+                "content": question,
+            }
+        ]
+
+    else:
+        st.session_state.selected_run_id = None
+        st.query_params.clear()
+        st.session_state.loaded_run_id = None
+
+        # -----------------------------------------------------------------------
+        # User message
+        # -----------------------------------------------------------------------
+
+        st.session_state.messages.append(
+            {
+                "role": "user",
+                "content": question,
+            }
+        )
+
+        with st.chat_message("user"):
+            st.markdown(question)
 
     # -----------------------------------------------------------------------
     # Assistant response
@@ -1245,8 +1441,8 @@ if question:
 
     with st.chat_message("assistant"):
 
-        status_placeholder = st.empty()
         response_placeholder = st.empty()
+        status_placeholder = st.empty()
 
         answer = ""
         sources = []
@@ -1255,7 +1451,7 @@ if question:
         # request and the Streamlit UI.
         event_queue = queue.Queue()
 
-        def consume_stream():
+        def consume_stream(url, payload=None):
             """
             Consume the FastAPI SSE stream in the background.
 
@@ -1265,8 +1461,8 @@ if question:
 
             try:
                 with api_session.post(
-                    API_URL,
-                    json={"question": question},
+                    url,
+                    json=payload,
                     stream=True,
                     timeout=(10, 300),
                 ) as response:
@@ -1338,8 +1534,18 @@ if question:
                 )
 
         # Start the HTTP request in the background.
+        resume_run_id = st.session_state.get("resume_run_id")
+
+        if resume_run_id:
+            stream_url = f"{API_BASE_URL}/runs/{resume_run_id}/resume"
+            stream_payload = None
+        else:
+            stream_url = API_URL
+            stream_payload = {"question": question}
+            
         worker = threading.Thread(
             target=consume_stream,
+            args=(stream_url, stream_payload),
             daemon=True,
         )
 
@@ -1358,19 +1564,36 @@ if question:
             "🕵️ Following the source...",
         ]
 
+        revision_waiting_messages = [
+            "🔍 Filling in the missing pieces...",
+            "📚 Searching for more evidence...",
+            "🧩 Connecting the missing details...",
+            "🔎 Verifying the gaps I found...",
+            "🧠 Improving the answer with more evidence...",
+        ]
+
         message_index = 0
+        generation_round = 0
         first_token_received = False
         stream_finished = False
         stream_error = None
         run_accepted = False
+        revision_started = False
+        last_waiting_message_time = time.time()
 
         while not first_token_received and not stream_finished:
+
+            current_waiting_messages = (
+                revision_waiting_messages
+                if generation_round > 0
+                else waiting_messages
+            )
 
             status_placeholder.markdown(
                 f"""
                 <div class="streaming-indicator">
                     <span class="streaming-dot"></span>
-                    {waiting_messages[message_index]}
+                    {current_waiting_messages[message_index]}
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1378,7 +1601,7 @@ if question:
 
             message_index = (
                 message_index + 1
-            ) % len(waiting_messages)
+            ) % len(current_waiting_messages)
 
             deadline = time.time() + 0.8
 
@@ -1389,19 +1612,40 @@ if question:
 
                     if event_type == "run_started":
                         run_accepted = True
-                        st.session_state.current_run_id = (
-                            data["run_id"]
-                        )
+                        st.session_state.current_run_id = data["run_id"]
+                        st.query_params["run_id"] = data["run_id"]
+                        st.session_state.current_run_question = question
 
                     elif event_type == "run_resumed":
 
                         st.session_state.current_run_id = (
                             data["run_id"]
                         )
+                        run_accepted = True
 
                     elif event_type == "generation_started":
 
-                        pass
+                        generation_round = data.get(
+                            "generation_round",
+                            0
+                        )
+
+                        if generation_round > 0:
+
+                            revision_started = True
+                            message_index = 0
+
+                            response_placeholder.empty()
+
+                            status_placeholder.markdown(
+                                f"""
+                                <div class="streaming-indicator">
+                                    <span class="streaming-dot"></span>
+                                    {revision_waiting_messages[message_index]}
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
 
                     elif event_type == "answer_delta":
 
@@ -1448,36 +1692,75 @@ if question:
         while not stream_finished:
 
             try:
-
-                event_type, data = event_queue.get(
-                    timeout=0.1
-                )
+                event_type, data = event_queue.get(timeout=0.1)
 
                 if event_type == "run_started":
                     run_accepted = True
                     st.session_state.current_run_id = data["run_id"]
+                    st.query_params["run_id"] = data["run_id"]
 
+                elif event_type == "generation_started":
 
-                if event_type == "answer_delta":
+                    generation_round = data.get(
+                        "generation_round",
+                        0
+                    )
+
+                    if generation_round > 0:
+                        revision_started = True
+                        message_index = 0
+                        last_waiting_message_time = time.time()
+
+                        status_placeholder.markdown(
+                            f"""
+                            <div class="streaming-indicator">
+                                <span class="streaming-dot"></span>
+                                {revision_waiting_messages[message_index]}
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+
+                elif event_type == "gap_processing_started":
+
+                    revision_started = True
+                    message_index = 0
+                    last_waiting_message_time = time.time()
+
+                    status_placeholder.markdown(
+                        f"""
+                        <div class="streaming-indicator">
+                            <span class="streaming-dot"></span>
+                            {revision_waiting_messages[message_index]}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                elif event_type == "answer_delta":
+
+                    if revision_started:
+
+                        # First token of the revised answer
+                        answer = ""
+                        revision_started = False
+
+                        response_placeholder.empty()
+                        status_placeholder.empty()
 
                     answer += data["data"]
 
-                    response_placeholder.markdown(
-                        answer
-                    )
+                    response_placeholder.markdown(answer)
 
                 elif event_type == "run_completed":
-
                     stream_finished = True
 
                 elif event_type == "error":
-
                     if isinstance(data, dict):
                         stream_error = data.get(
                             "data",
                             "RAG run failed."
                         )
-
                     else:
                         stream_error = str(data)
 
@@ -1485,8 +1768,28 @@ if question:
 
             except queue.Empty:
 
-                continue
+                if revision_started:
 
+                    current_waiting_messages = revision_waiting_messages
+
+                    status_placeholder.markdown(
+                        f"""
+                        <div class="streaming-indicator">
+                            <span class="streaming-dot"></span>
+                            {current_waiting_messages[message_index]}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                    if time.time() - last_waiting_message_time >= 1.0:
+                        message_index = (
+                            message_index + 1
+                        ) % len(current_waiting_messages)
+
+                        last_waiting_message_time = time.time()
+
+                continue
         # -------------------------------------------------------------------
         # Error handling
         # -------------------------------------------------------------------
@@ -1552,4 +1855,5 @@ if question:
         )
 
         if run_accepted:
+            st.session_state.resume_run_id = None
             st.rerun()

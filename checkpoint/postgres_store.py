@@ -147,7 +147,7 @@ class PostgresCheckpointStore:
                 """
                 SELECT
                     run_id,
-                    checkpoint -> 'query_input' ->> 'question' as question,
+                    checkpoint ->> 'original_question',
                     status, 
                     updated_at,
                     completed_at,

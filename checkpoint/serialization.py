@@ -46,6 +46,7 @@ def create_checkpoint(rag_state: RAGState) -> RAGCheckpoint:
 
     return RAGCheckpoint(
         schema_version = 1,
+        original_question=rag_state.original_question,
         query_input = rag_state.query_input,
         stage = rag_state.stage,
         generation_round = rag_state.generation_round,
@@ -67,6 +68,7 @@ def restore_state(checkpoint: RAGCheckpoint, resolver: EvidenceResolver) -> RAGS
     final_evidence = checkpoints_to_evidence_items(checkpoint.final_evidence, resolver)
 
     return RAGState(
+        original_question=checkpoint.original_question,
         query_input = checkpoint.query_input,
         stage = checkpoint.stage,
         generation_round = checkpoint.generation_round,

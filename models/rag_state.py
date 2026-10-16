@@ -24,6 +24,10 @@ class RAGState:
     """
     Represents the state of the RAG execution.
     """
+
+    # Original user request — used for UI
+    original_question: str
+    
     # Initial request
     query_input: QueryInput
 

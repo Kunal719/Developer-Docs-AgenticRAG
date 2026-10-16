@@ -36,7 +36,7 @@ from checkpoint.database import create_connection_pool
 from checkpoint.store import CheckpointStore
 from checkpoint.postgres_store import PostgresCheckpointStore
 from checkpoint.resolver import ChromaEvidenceResolver
-from checkpoint.models import RunStatus
+from checkpoint.models import RunStatus, RAGCheckpoint
 from checkpoint.serialization import create_checkpoint, restore_state
 
 from evidence.rerank_selector import RerankEvidenceSelector
@@ -193,10 +193,12 @@ class RAGService:
             rrf_k=RRF_K,
         )
 
+
         reranker = CrossEncoderReranker(
             rerank_model="cross-encoder/ettin-reranker-32m-v1",
             top_k=RERANK_TOP_K,
             batch_size=16,
+            onnx_file="onnx/model_O2.onnx",
         )
 
         evidence_selector = RerankEvidenceSelector(reranker)
@@ -291,7 +293,7 @@ class RAGService:
         self.checkpoint_store.create_run(
             run_id=run_id,
             user_id=user_id,
-            checkpoint=create_checkpoint(RAGState(query_input=initial_query_input))
+            checkpoint=create_checkpoint(RAGState(query_input=initial_query_input, original_question=question)),
         )
 
         return run_id
@@ -325,6 +327,15 @@ class RAGService:
                 )
             )
 
+        def on_gap_processing_started() -> None:
+            answer_queue.put(
+                RAGStreamEvent(
+                    type="gap_processing_started",
+                    run_id=run_id,
+                    generation_round=current_generation_round,
+                )
+            )
+
         def run_agent() -> None:
             try:
                 query_input = self._input_normalizer.normalize(question)
@@ -333,7 +344,8 @@ class RAGService:
                     run_id=run_id,
                     user_id=user_id,
                     on_answer_delta=on_answer_delta,
-                    on_generation_started=on_generation_started
+                    on_generation_started=on_generation_started,
+                    on_gap_processing_started=on_gap_processing_started
                 )
 
                 answer_queue.put(
@@ -426,6 +438,15 @@ class RAGService:
                 )
             )
 
+        def on_gap_processing_started() -> None:
+            answer_queue.put(
+                RAGStreamEvent(
+                    type="gap_processing_started",
+                    run_id=run_id,
+                    generation_round=current_generation_round,
+                )
+            )
+
         def run_agent() -> None:
             try:
                 if checkpoint.stage == RAGStage.INITIALIZED:
@@ -437,7 +458,8 @@ class RAGService:
                     user_id=user_id,
                     resume=True,
                     on_answer_delta=on_answer_delta,
-                    on_generation_started=on_generation_started
+                    on_generation_started=on_generation_started,
+                    on_gap_processing_started=on_gap_processing_started
                 )
 
                 answer_queue.put(
@@ -491,6 +513,9 @@ class RAGService:
 
         # Restore state
         return restore_state(checkpoint, self._evidence_resolver)
+
+    def get_run_checkpoint(self, run_id: str, user_id: str) -> RAGCheckpoint:
+        return self.checkpoint_store.load(run_id, user_id)
 
     def get_run_status(self, run_id: str, user_id: str) -> RunStatus:
         return self.checkpoint_store.get_status(run_id, user_id)

@@ -28,6 +28,9 @@ class RAGCheckpoint(BaseModel):
     """
     schema_version: int = 1
 
+    # Original user request — used for UI
+    original_question: str
+
     query_input: QueryInput
     stage: RAGStage
     generation_round: int

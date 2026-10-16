@@ -150,12 +150,33 @@ class AgenticRAG():
             if chunk.usage_metadata:
                 usage = chunk.usage_metadata
 
+            if chunk.response_metadata:
+                metadata = chunk.response_metadata
+
+                if "finish_reason" in metadata:
+                    print(
+                        f"[STREAM] round={round_number} "
+                        f"finish_reason={metadata['finish_reason']}"
+                    )
+
+                if "token_usage" in metadata:
+                    print(
+                        f"[STREAM] round={round_number} "
+                        f"token_usage={metadata['token_usage']}"
+                    )
+
         end_time = perf_counter()
 
         if usage is None:
             raise RuntimeError(
                 "Generation stream completed without usage metadata"
             )
+
+        print(
+            f"[STREAM END] round={round_number} "
+            f"json_length={len(json_buffer)} "
+            f"usage={usage}"
+        )
 
         generated_answer = GeneratedAnswer.model_validate(
             json.loads(json_buffer)
@@ -328,7 +349,8 @@ class AgenticRAG():
                 self._checkpoint_store.heartbeat(run_id)
             except Exception:
                 # Heartbeat failure should not kill RAG run
-                pass
+                logger.exception("Heartbeat failed for run %s", run_id)
+                # pass
 
     
     def run(
@@ -339,7 +361,8 @@ class AgenticRAG():
         observer: PipelineObserver | None = None,
         resume: bool = False,
         on_answer_delta: Callable[[str], None] | None = None,
-        on_generation_started: Callable[[int], None] | None = None
+        on_generation_started: Callable[[int], None] | None = None,
+        on_gap_processing_started: Callable[[], None] | None = None
     ) -> GeneratedAnswer:
 
         # Initiate run_id and rag_state
@@ -359,7 +382,12 @@ class AgenticRAG():
 
             # self._checkpoint_store.resume_run(run_id, user_id)
         else: 
-            state = RAGState(query_input=query_input)
+            curr_checkpoint = self._checkpoint_store.load(run_id, user_id)
+
+            state = RAGState(
+                original_question=curr_checkpoint.original_question,
+                query_input=query_input,
+            )
             # Get retrieval plan
             state.retrieval_plan = self._query_router.route(query=query_input, observer=observer)
             state.stage = RAGStage.ROUTED
@@ -431,7 +459,6 @@ class AgenticRAG():
                     on_generation_started=on_generation_started
                 )
                 state.stage = RAGStage.DRAFT_GENERATED
-
                 # Save checkpoint after DRAFT_GENERATED
                 self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
 
@@ -483,6 +510,10 @@ class AgenticRAG():
                     return state.generated_answer
                 
                 state.gaps = self._select_gaps(state.generated_answer.gaps)
+                
+                if state.gaps and on_gap_processing_started is not None:
+                    on_gap_processing_started()
+                
                 print(f"Selected {len(state.gaps)} gaps for retrieval")
 
                 if not state.gaps:
@@ -516,6 +547,12 @@ class AgenticRAG():
                 self._checkpoint_store.save(run_id, user_id, create_checkpoint(state))
 
                 self._generate_gap_round(state, observer, on_answer_delta, on_generation_started)
+                print(
+                    f"[AFTER GENERATION] round={state.generation_round} "
+                    f"answer_length={len(state.generated_answer.answer)} "
+                    f"is_complete={state.generated_answer.is_complete} "
+                    f"gaps={len(state.generated_answer.gaps)}"
+                )
                 state.stage = RAGStage.GAP_GENERATION_COMPLETED
 
                 # Save checkpoint after GAP_GENERATION_COMPLETED

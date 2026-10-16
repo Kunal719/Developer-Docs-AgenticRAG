@@ -1,18 +1,12 @@
-from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse
 
 from app.auth.google import create_google_flow
-# from app.auth.dependencies import get_current_user
 
 from google.oauth2 import id_token
 from google.auth.transport import requests
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-# @router.get("/me")
-# def get_me(user_id: str = Depends(get_current_user)):
-#     return {"user_id": user_id}
 
 
 @router.get("/google/login")

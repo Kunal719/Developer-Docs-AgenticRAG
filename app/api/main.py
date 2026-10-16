@@ -44,6 +44,7 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=os.environ["SESSION_SECRET_KEY"],
     session_cookie="fastapi-session",
+    max_age=7*24*60*60,
     https_only=False,
     same_site='lax'
 )
