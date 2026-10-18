@@ -35,21 +35,42 @@ def get_api_session() -> requests.Session:
     return session
 
 def get_runs():
-    response = api_session.get(f"{API_BASE_URL}/runs", timeout=5)
+    try:
+        response = api_session.get(f"{API_BASE_URL}/runs", timeout=5)
+        response.raise_for_status()
+        return response.json()
+    
+    except requests.exceptions.ConnectionError:
+        st.warning("Backend is unavailable. Please wait for it to restart.")
+    except requests.exceptions.Timeout:
+        st.warning("Backend request timed out. Please try again.")
+    except requests.exceptions.HTTPError:
+        st.error("Unable to retrieve runs from the backend.")
 
-    response.raise_for_status()
+    return None
 
-    return response.json()
 
 def get_run(run_id):
-    response = api_session.get(f"{API_BASE_URL}/runs/{run_id}", timeout=5)
+    try:
+        response = api_session.get(
+            f"{API_BASE_URL}/runs/{run_id}",
+            timeout=5,
+        )
 
-    if response.status_code == 404:
-        return None
-    
-    response.raise_for_status()
-    
-    return response.json()
+        if response.status_code == 404:
+            return None
+
+        response.raise_for_status()
+        return response.json()
+
+    except requests.exceptions.ConnectionError:
+        st.warning("Backend is unavailable. Please wait for it to restart.")
+    except requests.exceptions.Timeout:
+        st.warning("Backend request timed out. Please try again.")
+    except requests.exceptions.HTTPError:
+        st.error("Unable to retrieve run status from the backend.")
+
+    return None
 
 def api_unavailable_message():
     st.error(
@@ -622,7 +643,7 @@ with st.sidebar:
                     </span>
 
                     <span class="status-value">
-                        Hybrid + RRF
+                        Multi-Corpus Hybrid RRF
                     </span>
 
                 </div>
@@ -634,7 +655,7 @@ with st.sidebar:
                     </span>
 
                     <span class="status-value">
-                        Cross-Encoder
+                        Ettin Cross-Encoder (ONNX)
                     </span>
 
                 </div>
@@ -835,7 +856,7 @@ with st.sidebar:
                 text-align:center;
                 font-weight:600;
             ">
-                Cross-Encoder Reranker
+                Ettin Cross-Encoder (ONNX)
             </div>
 
             <div style="text-align:center;color:#4d5866;">↓</div>
@@ -1203,6 +1224,11 @@ selected_run_id = st.session_state.get("selected_run_id")
 
 if selected_run_id:
     selected_run = get_run(selected_run_id)
+
+    # Backend may be unavailable while a response is being generated.
+    # Avoid accessing run fields when the API request fails.
+    if selected_run is None:
+        pass
 
     if selected_run["status"] in {"running", "interrupted"}:
 
