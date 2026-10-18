@@ -1,7 +1,7 @@
 import json
 from statistics import mean
 
-with open("evaluation/results/v5_20260810_010024.json", encoding="utf-8") as f:
+with open("evaluation/results/v7_results.json", encoding="utf-8") as f:
     results = json.load(f)
 
 def avg(values):
@@ -20,3 +20,26 @@ print("Hallucination:", avg(r["judge_evaluation"]["hallucination"]["score"] for 
 print("Latency:", avg(r["overall_metrics"]["total_latency"] for r in results))
 print("Cost:", avg(r["overall_metrics"]["total_cost"] for r in results))
 print("Total cost:", sum(r["overall_metrics"]["total_cost"] for r in results))
+
+# Top 5 Precision scores
+top_precision = sorted(
+    results,
+    key=lambda r: r["overall_metrics"]["precision_at_k"] or 0,
+    reverse=True
+)[:5]
+
+print("\nTop 5 Precision Scores:")
+for r in top_precision:
+    print(r["overall_metrics"]["precision_at_k"])
+
+
+# Top 5 Recall scores
+top_recall = sorted(
+    results,
+    key=lambda r: r["overall_metrics"]["recall_at_k"] or 0,
+    reverse=True
+)[:5]
+
+print("\nTop 5 Recall Scores:")
+for r in top_recall:
+    print(r["overall_metrics"]["recall_at_k"])

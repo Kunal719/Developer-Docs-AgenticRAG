@@ -2,7 +2,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-RESULT_PATH = Path("evaluation/results/v5_20260810_010024.json")
+RESULT_PATH = Path("evaluation/results/v7_20260831_163852.json")
 
 with RESULT_PATH.open(encoding="utf-8") as f:
     results = json.load(f)
